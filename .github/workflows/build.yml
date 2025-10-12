@@ -1,0 +1,21 @@
+on:
+  workflow_dispatch: {}
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: setup ygg
+        env:
+          peers: 'Peers: ["tcp://165.227.17.198:9002","tcp://longseason.1200bps.xyz:13121","tcp://vpn.itrus.su:7991","tcp://51.15.204.214:12345"]'
+        run: |
+          sudo apt update
+          sudo apt install yggdrasil
+          yggdrasil -genconf | sudo tee /etc/yggdrasil/yggdrasil.conf > /dev/null
+          sudo sed -i "s|^ *Peers:.*|$peers|" /etc/yggdrasil/yggdrasil.conf
+          sudo systemctl start yggdrasil
+          systemctl status yggdrasil
+      - name: ip
+        id: ip
+        run: |
+          curl 2ip.ygg.at/myip --connect-timeout 10
