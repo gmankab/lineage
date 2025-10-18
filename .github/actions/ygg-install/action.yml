@@ -1,6 +1,7 @@
 runs:
   using: composite
   steps:
-    - run: |
+    - shell: bash
+      run: |
         sudo apt update
         sudo apt install yggdrasil

@@ -4,7 +4,8 @@ inputs:
 runs:
   using: composite
   steps:
-    - run: |
+    - shell: bash
+      run: |
         echo $config | sudo tee /etc/yggdrasil/yggdrasil.conf > /dev/null
         sudo systemctl start yggdrasil
         systemctl status yggdrasil
