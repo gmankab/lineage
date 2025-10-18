@@ -2,8 +2,6 @@
 
 set -uexo pipefail
 
-sudo apt install nfs-kernel-server
-
 sudo mkdir -p /etc/exports.d
 sudo mkdir -p /var/export/out
 sudo chown 1000 /var/export/*
