@@ -1,21 +1,40 @@
 on:
   workflow_dispatch: {}
 jobs:
-  build:
+  keys:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: setup ygg
-        env:
-          peers: 'Peers: ["tcp://165.227.17.198:9002","tcp://longseason.1200bps.xyz:13121","tcp://vpn.itrus.su:7991","tcp://51.15.204.214:12345"]'
-        run: |
-          sudo apt update
-          sudo apt install yggdrasil
-          yggdrasil -genconf | sudo tee /etc/yggdrasil/yggdrasil.conf > /dev/null
-          sudo sed -i "s|^ *Peers:.*|$peers|" /etc/yggdrasil/yggdrasil.conf
-          sudo systemctl start yggdrasil
-          systemctl status yggdrasil
-      - name: ip
-        id: ip
-        run: |
-          curl 2ip.ygg.at/myip --connect-timeout 10
+      - uses: ./.github/actions/ygg-install
+      - name: keys
+        id: keys
+        run: python scripts/nas/ygg-keys.py
+    outputs:
+      builder_privatekey: ${{ steps.config.outputs.builder_privatekey }}
+      builder_ip: ${{ steps.config.outputs.builder_ip }}
+      repo_privatekey: ${{ steps.config.outputs.repo_privatekey }}
+      repo_ip: ${{ steps.config.outputs.repo_ip }}
+      out_privatekey: ${{ steps.config.outputs.out_privatekey }}
+      out_ip: ${{ steps.config.outputs.out_ip }}
+
+  nas_repo:
+    needs: keys
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ygg-install
+      - uses: ./.github/actions/ygg-config
+        with:
+          privatekey: ${{ needs.keys.outputs.repo_privatekey }}
+      - run: bash scripts/nas/repo.sh
+
+  nas_out:
+    needs: keys
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ygg-install
+      - uses: ./.github/actions/ygg-config
+        with:
+          privatekey: ${{ needs.keys.outputs.out_privatekey }}
+      - run: bash scripts/nas/out.sh

@@ -1,0 +1,13 @@
+inputs:
+  privatekey:
+    required: true
+runs:
+  using: composite
+  steps:
+    - run: |
+        echo $config | sudo tee /etc/yggdrasil/yggdrasil.conf > /dev/null
+        sudo systemctl start yggdrasil
+        systemctl status yggdrasil
+        curl 2ip.ygg.at/myip
+      env:
+        config: '{"PrivateKey":"${{ inputs.privatekey }}","Peers":["tcp://165.227.17.198:9002","tcp://longseason.1200bps.xyz:13121","tcp://vpn.itrus.su:7991","tcp://51.15.204.214:12345"]}'
