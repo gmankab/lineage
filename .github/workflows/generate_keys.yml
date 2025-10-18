@@ -1,0 +1,21 @@
+on:
+  workflow_dispatch: {}
+
+jobs:
+  keys:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ygg-install
+      - name: keys
+        id: keys
+        run: python scripts/nas/ygg-keys.py
+        env:
+          GH_TOKEN: ${{ secrets.gh_secrets_token }}
+    outputs:
+      builder_privatekey: ${{ steps.keys.outputs.builder_privatekey }}
+      builder_ip:         ${{ steps.keys.outputs.builder_ip }}
+      repo_privatekey:    ${{ steps.keys.outputs.repo_privatekey }}
+      repo_ip:            ${{ steps.keys.outputs.repo_ip }}
+      out_privatekey:     ${{ steps.keys.outputs.out_privatekey }}
+      out_ip:             ${{ steps.keys.outputs.out_ip }}

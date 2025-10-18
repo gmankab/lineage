@@ -1,46 +1,29 @@
 on:
   workflow_dispatch: {}
-jobs:
-  keys:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/ygg-install
-      - name: keys
-        id: keys
-        run: python scripts/nas/ygg-keys.py
-    outputs:
-      builder_privatekey: ${{ steps.keys.outputs.builder_privatekey }}
-      builder_ip:         ${{ steps.keys.outputs.builder_ip }}
-      repo_privatekey:    ${{ steps.keys.outputs.repo_privatekey }}
-      repo_ip:            ${{ steps.keys.outputs.repo_ip }}
-      out_privatekey:     ${{ steps.keys.outputs.out_privatekey }}
-      out_ip:             ${{ steps.keys.outputs.out_ip }}
 
+jobs:
   nas_repo:
-    needs: keys
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - run: sudo apt install nfs-kernel-server
       - uses: ./.github/actions/ygg-install
       - uses: ./.github/actions/ygg-config
         with:
-          privatekey: ${{ needs.keys.outputs.repo_privatekey }}
-      - run: sudo apt install nfs-kernel-server
+          privatekey: ${{ secrets.repo_privatekey }}
       - run: bash scripts/nas/repo.sh
         env:
-          builder: ${{ needs.keys.outputs.builder_ip }}
+          builder: ${{ vars.builder_ip }}
 
   nas_out:
-    needs: keys
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - run: sudo apt install nfs-kernel-server
       - uses: ./.github/actions/ygg-install
       - uses: ./.github/actions/ygg-config
         with:
-          privatekey: ${{ needs.keys.outputs.out_privatekey }}
-      - run: sudo apt install nfs-kernel-server
+          privatekey: ${{ secrets.out_privatekey }}
       - run: bash scripts/nas/out.sh
         env:
-          builder: ${{ needs.keys.outputs.builder_ip }}
+          builder: ${{ vars.builder_ip }}

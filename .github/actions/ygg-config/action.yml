@@ -1,6 +1,7 @@
 inputs:
   privatekey:
     required: true
+    sensitive: true
 runs:
   using: composite
   steps:
