@@ -5,3 +5,4 @@ runs:
       run: |
         sudo apt update
         sudo apt install yggdrasil
+        sudo apt clean
