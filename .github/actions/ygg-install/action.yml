@@ -1,8 +1,0 @@
-runs:
-  using: composite
-  steps:
-    - shell: bash
-      run: |
-        sudo apt update
-        sudo apt install yggdrasil
-        sudo apt clean

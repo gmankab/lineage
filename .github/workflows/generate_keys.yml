@@ -6,7 +6,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/ygg-install
+      - run: |
+          sudo apt update
+          sudo apt install yggdrasil
       - name: keys
         id: keys
         run: python scripts/nas/ygg-keys.py

@@ -5,9 +5,12 @@ jobs:
   nas_repo:
     runs-on: ubuntu-24.04
     steps:
+      - uses: ./.github/actions/clean
       - uses: actions/checkout@v4
-      - run: sudo apt install nfs-kernel-server
-      - uses: ./.github/actions/ygg-install
+      - run: |
+          sudo apt update
+          sudo apt install yggdrasil nfs-kernel-server
+          sudo apt clean
       - uses: ./.github/actions/ygg-config
         with:
           privatekey: ${{ secrets.repo_privatekey }}
@@ -18,9 +21,12 @@ jobs:
   nas_out:
     runs-on: ubuntu-24.04
     steps:
+      - uses: ./.github/actions/clean
       - uses: actions/checkout@v4
-      - run: sudo apt install nfs-kernel-server
-      - uses: ./.github/actions/ygg-install
+      - run: |
+          sudo apt update
+          sudo apt install yggdrasil nfs-kernel-server
+          sudo apt clean
       - uses: ./.github/actions/ygg-config
         with:
           privatekey: ${{ secrets.out_privatekey }}
