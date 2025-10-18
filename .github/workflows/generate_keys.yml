@@ -11,7 +11,7 @@ jobs:
           sudo apt install yggdrasil
       - name: keys
         id: keys
-        run: python scripts/nas/ygg-keys.py
+        run: python scripts/ygg-keys.py
         env:
           GH_TOKEN: ${{ secrets.gh_secrets_token }}
     outputs:
