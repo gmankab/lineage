@@ -2,8 +2,6 @@
 
 set -uexo pipefail
 
-sudo apt install nfs-common
-
 mkdir out prebuilts external .repo
 sudo mount -t nfs "[$out]:/external" out
 sudo mount -t nfs "[$repo]:/external" prebuilts
