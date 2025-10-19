@@ -7,7 +7,7 @@ jobs:
     steps:
       - uses: gmankab/lineage/.github/actions/clean@main
       - uses: actions/checkout@v4
-      - run: bash scripts/deps/ubuntu-has.sh
+      - run: bash scripts/deps/ubuntu-nas.sh
       - uses: ./.github/actions/zram
       - uses: ./.github/actions/ygg
         with:
@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: gmankab/lineage/.github/actions/clean@main
       - uses: actions/checkout@v4
-      - run: bash scripts/deps/ubuntu-has.sh
+      - run: bash scripts/deps/ubuntu-nas.sh
       - uses: ./.github/actions/zram
       - uses: ./.github/actions/ygg
         with:
