@@ -11,7 +11,7 @@ jobs:
           sudo apt update
           sudo apt install yggdrasil nfs-kernel-server
           sudo apt clean
-      - uses: ./.github/actions/ygg-config
+      - uses: ./.github/actions/ygg
         with:
           privatekey: ${{ secrets.repo_privatekey }}
       - run: bash scripts/nas/repo.sh
@@ -27,7 +27,7 @@ jobs:
           sudo apt update
           sudo apt install yggdrasil nfs-kernel-server
           sudo apt clean
-      - uses: ./.github/actions/ygg-config
+      - uses: ./.github/actions/ygg
         with:
           privatekey: ${{ secrets.out_privatekey }}
       - run: bash scripts/nas/out.sh
@@ -43,7 +43,7 @@ jobs:
           sudo apt update
           sudo apt install yggdrasil nfs-common
           sudo apt clean
-      - uses: ./.github/actions/ygg-config
+      - uses: ./.github/actions/ygg
         with:
           privatekey: ${{ secrets.builder_privatekey }}
       - run: bash scripts/builder/test.sh
