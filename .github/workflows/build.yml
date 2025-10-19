@@ -43,7 +43,7 @@ jobs:
       - uses: ./.github/actions/ygg
         with:
           privatekey: ${{ secrets.builder_privatekey }}
-      - run: bash scripts/builder/test.sh
+      - run: bash scripts/builder/main.sh
         env:
           out: ${{ vars.out_ip }}
           repo: ${{ vars.repo_ip }}
