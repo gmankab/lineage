@@ -3,10 +3,10 @@
 set -uexo pipefail
 
 sudo mkdir -p /etc/exports.d
-sudo mkdir -p /var/export/.repo
-sudo mkdir -p /var/export/prebuilts
-sudo mkdir -p /var/export/external
-sudo chown 1000 /var/export/*
-echo "/var/export $builder(rw,async,fsid=0)" | sudo tee /etc/exports.d/nfs.exports
+sudo mkdir -p $GITHUB_WORKSPACE/export/.repo
+sudo mkdir -p $GITHUB_WORKSPACE/export/prebuilts
+sudo mkdir -p $GITHUB_WORKSPACE/export/external
+sudo chown 1000 $GITHUB_WORKSPACE/export/*
+echo "$GITHUB_WORKSPACE/export $builder(rw,async,fsid=0)" | sudo tee /etc/exports.d/nfs.exports
 sudo systemctl enable --now nfs-server
 sudo exportfs -rav
