@@ -3,7 +3,7 @@
 set -uexo pipefail
 
 mkdir out prebuilts external .repo
-sudo mount -t nfs "[$out]:/external" out
-sudo mount -t nfs "[$repo]:/external" prebuilts
-sudo mount -t nfs "[$repo]:/external" external
-sudo mount -t nfs "[$repo]:/external" .repo
+until sudo mount -t nfs "[$out]:/out"              out; do sleep 5; done
+until sudo mount -t nfs "[$repo]:/.repo"         .repo; do sleep 5; done
+until sudo mount -t nfs "[$repo]:/prebuilts" prebuilts; do sleep 5; done
+until sudo mount -t nfs "[$repo]:/external"   external; do sleep 5; done
