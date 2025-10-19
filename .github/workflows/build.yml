@@ -40,7 +40,10 @@ jobs:
       - uses: ./.github/actions/ygg
         with:
           privatekey: ${{ secrets.builder_privatekey }}
-      - run: bash scripts/builder/main.sh
+      - run: bash scripts/builder/mount.sh
         env:
           out: ${{ vars.out_ip }}
           repo: ${{ vars.repo_ip }}
+      - run: bash scripts/builder/prepare.sh
+      - run: bash scripts/builder/build.sh
+      - run: bash scripts/builder/done.sh
