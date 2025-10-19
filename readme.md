@@ -1,4 +1,4 @@
-# building linage os on github actions
+# building lineage os on github actions
 
 ### how to use
 
