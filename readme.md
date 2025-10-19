@@ -16,7 +16,7 @@
 
 - lineage os is known to require 300gb of storage for build
 - github actions workflow provides 30gb for each runner by default
-- we use easimon/maximize-build-space workflow to clean some space and get 100gb of free storage
+- we use easimon/maximize-build-space workflow to clean some space and get 100gb of free storage for each runer
 - we use yggdrasil to combine space on 3 separate runners
 - after all we are getting 300gb of space, which is enough for building lineage os
 
