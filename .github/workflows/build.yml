@@ -36,10 +36,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: |
-          sudo apt update
-          sudo apt install yggdrasil nfs-common
-          sudo apt clean
+      - run: bash scripts/deps/ubuntu.sh
       - uses: ./.github/actions/ygg
         with:
           privatekey: ${{ secrets.builder_privatekey }}
