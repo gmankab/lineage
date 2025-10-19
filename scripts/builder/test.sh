@@ -2,6 +2,9 @@
 
 set -uexo pipefail
 
+sudo apt update
+sudo apt install yggdrasil nfs-common
+
 mkdir out prebuilts external .repo
 
 until sudo mount -t nfs "[$out]:/out"              out; do sleep 5; done
