@@ -10,7 +10,10 @@ while true; do
   sleep 10
 done
 
-[ -e $dir/started ] || echo 'error: build not started' && exit 1
+if [ ! -e "$dir/started" ]; then
+  echo 'error: build not started'
+  exit 1
+fi
 
 export start=$(date +%s)
 export end=$(($start + 21600))
