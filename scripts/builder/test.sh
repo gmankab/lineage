@@ -9,7 +9,7 @@ until sudo mount -t nfs "[$repo]:/.repo"         .repo; do sleep 5; done
 until sudo mount -t nfs "[$repo]:/prebuilts" prebuilts; do sleep 5; done
 until sudo mount -t nfs "[$repo]:/external"   external; do sleep 5; done
 
-echo 'building'
+echo 'testing without building'
 
 touch out/done
 touch .repo/done
