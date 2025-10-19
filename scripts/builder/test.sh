@@ -14,5 +14,7 @@ until sudo mount -t nfs "[$repo]:/external"   external; do sleep 5; done
 
 echo 'testing without building'
 
+touch out/started
+touch .repo/started
 touch out/done
 touch .repo/done
