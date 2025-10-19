@@ -33,3 +33,20 @@ jobs:
       - run: bash scripts/nas/out.sh
         env:
           builder: ${{ vars.builder_ip }}
+
+  builder:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: gmankab/lineage/.github/actions/clean@main
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt update
+          sudo apt install yggdrasil nfs-common
+          sudo apt clean
+      - uses: ./.github/actions/ygg-config
+        with:
+          privatekey: ${{ secrets.builder_privatekey }}
+      - run: bash scripts/builder/test.sh
+        env:
+          out: ${{ vars.out_ip }}
+          repo: ${{ vars.repo_ip }}

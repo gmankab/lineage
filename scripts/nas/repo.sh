@@ -10,3 +10,6 @@ sudo chown 1000 $GITHUB_WORKSPACE/export/*
 echo "$GITHUB_WORKSPACE/export $builder(rw,async,fsid=0)" | sudo tee /etc/exports.d/nfs.exports
 sudo systemctl enable --now nfs-server
 sudo exportfs -rav
+
+export file=$GITHUB_WORKSPACE/export/.repo/done
+bash scripts/nas/wait.sh
