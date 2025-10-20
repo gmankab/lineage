@@ -2,6 +2,8 @@
 
 set -x
 
+export PATH="$HOME/.local/bin:$PATH"
+
 git config --global trailer.changeid.key "Change-Id"
 git config --global user.email "you@example.com"
 git config --global user.name "Your Name"
