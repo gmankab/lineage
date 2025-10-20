@@ -2,6 +2,8 @@
 
 set -uexo pipefail
 
+mkdir lineage
+cd lineage
 mkdir out prebuilts external .repo
 
 until sudo mount -t nfs "[$out]:/out"              out; do sleep 5; done

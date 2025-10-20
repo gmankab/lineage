@@ -2,5 +2,5 @@
 
 set -uexo pipefail
 
-touch out/done
-touch .repo/done
+touch lineage/out/done
+touch lineage/.repo/done
