@@ -2,34 +2,6 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  nas_repo:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: gmankab/lineage/.github/actions/clean@main
-      - uses: actions/checkout@v4
-      - run: bash scripts/deps/ubuntu-nas.sh
-      - uses: ./.github/actions/zram
-      - uses: ./.github/actions/ygg
-        with:
-          privatekey: ${{ secrets.repo_privatekey }}
-      - run: bash scripts/nas/repo.sh
-        env:
-          builder: ${{ vars.builder_ip }}
-
-  nas_out:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: gmankab/lineage/.github/actions/clean@main
-      - uses: actions/checkout@v4
-      - run: bash scripts/deps/ubuntu-nas.sh
-      - uses: ./.github/actions/zram
-      - uses: ./.github/actions/ygg
-        with:
-          privatekey: ${{ secrets.out_privatekey }}
-      - run: bash scripts/nas/out.sh
-        env:
-          builder: ${{ vars.builder_ip }}
-
   builder:
     runs-on: ubuntu-24.04
     steps:
@@ -37,13 +9,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash scripts/deps/ubuntu-build.sh
       - uses: ./.github/actions/zram
-      - uses: ./.github/actions/ygg
-        with:
-          privatekey: ${{ secrets.builder_privatekey }}
-      - run: bash scripts/builder/mount.sh
-        env:
-          out: ${{ vars.out_ip }}
-          repo: ${{ vars.repo_ip }}
+      - run: bash scripts/builder/test.sh
       - run: bash scripts/builder/prepare.sh
       - run: bash scripts/builder/build.sh
       - run: bash scripts/builder/done.sh

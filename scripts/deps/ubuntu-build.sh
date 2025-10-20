@@ -6,6 +6,7 @@ sudo apt install linux-modules-extra-$(uname -r) yggdrasil nfs-common android-sd
 wget https://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2_amd64.deb && sudo dpkg -i libtinfo5_6.3-2_amd64.deb && rm -f libtinfo5_6.3-2_amd64.deb
 wget https://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.3-2_amd64.deb && sudo dpkg -i libncurses5_6.3-2_amd64.deb && rm -f libncurses5_6.3-2_amd64.deb
 
+mkdir -p ~/.local/bin
 curl https://storage.googleapis.com/git-repo-downloads/repo -o ~/.local/bin/repo
 chmod +x ~/.local/bin/repo
 
