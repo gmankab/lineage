@@ -5,6 +5,7 @@ set -x
 git config --global trailer.changeid.key "Change-Id"
 git config --global user.email "you@example.com"
 git config --global user.name "Your Name"
+git config --global color.ui auto
 git lfs install
 
 ccache -M 50G
