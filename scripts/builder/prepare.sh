@@ -13,7 +13,7 @@ git lfs install
 ccache -M 50G
 ccache -o compression=true
 
-repo init -u https://github.com/LineageOS/android.git -b lineage-23.0 --git-lfs --depth=1
-repo sync --current-branch --force-sync -j16
-repo sync --current-branch --force-sync -j1 --fail-fast
+script -c 'repo init -u https://github.com/LineageOS/android.git -b lineage-23.0 --git-lfs --depth=1' /dev/null
+script -c 'repo sync --current-branch --force-sync -j16' /dev/null
+script -c 'repo sync --current-branch --force-sync -j1 --fail-fast' /dev/null
 git clone --depth=1 -b lineage-22.2 https://github.com/TheMuppets/proprietary_vendor_nothing_Spacewar vendor/nothing/Spacewar
