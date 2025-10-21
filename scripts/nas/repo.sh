@@ -9,5 +9,5 @@ echo "$(pwd)/export $builder(rw,async,fsid=0)" | sudo tee /etc/exports.d/nfs.exp
 sudo systemctl enable --now nfs-server
 sudo exportfs -rav
 
-export dir=$(pwd)/export/.repo
+export dir=$(pwd)/export/prebuilts
 bash scripts/nas/wait.sh
