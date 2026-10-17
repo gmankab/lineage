@@ -1,0 +1,24 @@
+on:
+  workflow_dispatch: {}
+
+jobs:
+  squashfs:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/zram
+      - run: |
+          export id=$(gh run list -w builder.yml -s success -L 1 --json databaseId -q '.[0].databaseId')
+          gh run download $id -n squashfs-builder
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: justinthelaw/maximize-github-runner-space@v0.12.3
+        with:
+          cleanup-profile: max
+          swapfile-size: '0'
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y squashfs-tools
+          chmod +x squashfs-builder
+          ./squashfs-builder
+          ls -lh lineage.squashfs
