@@ -261,7 +261,7 @@ fn stage_project(p: &Project, all: &[Project], work: &Path, guard: &Guard,
     let repo = work.join("active.git");
     let mut cmd = git(&repo);
     cmd.arg(format!("--work-tree={}", dest.display()))
-        .args(["-c", "core.bare=false", "checkout", "-f", sha, "--", "."]);
+        .args(["-c", "core.bare=false", "checkout", "--detach", "-f", sha]);
     guard.run(cmd)?;
     let prefix = format!("{}/", p.path);
     for child in all {
@@ -483,6 +483,32 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn empty_project() {
+        let work = std::env::temp_dir().join(format!("squashfs-empty-{}", std::process::id()));
+        fs::create_dir(&work).unwrap();
+        let guard = Guard { root: work.clone(), floor: 0 };
+        let repo = work.join("active.git");
+        let mut init = Command::new("git");
+        init.args(["init", "--bare", "--quiet"]).arg(&repo);
+        guard.run(init).unwrap();
+        let mut tree = git(&repo);
+        tree.arg("mktree").stdin(Stdio::null());
+        let tree = git_output(tree).unwrap();
+        let mut commit = git(&repo);
+        commit.args(["-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                     "commit-tree", &tree, "-m", "empty"]);
+        let sha = git_output(commit).unwrap();
+        set_head(&repo, &sha, &guard).unwrap();
+        let project = Project { path: "empty".into(), url: "unused".into(),
+            revision: sha.clone(), copyfiles: vec![], linkfiles: vec![] };
+        let stage = stage_project(&project, std::slice::from_ref(&project), &work,
+                                  &guard, &sha, 0, b"{}").unwrap();
+        assert!(stage.join("empty").is_dir());
+        assert_eq!(fs::read_to_string(stage.join(".source-image/commits/000000")).unwrap(),
+                   format!("{sha}\n"));
+        fs::remove_dir_all(work).unwrap();
+    }
     #[test]
     fn path_validation() {
         for bad in ["", "../foo", "a//b", "a/./b", "/abs", "a/.repo/b", "a/.git/b", ".source-image/x"] {
