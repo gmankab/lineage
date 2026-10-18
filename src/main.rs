@@ -244,15 +244,22 @@ fn place_files(p: &Project, stage: &Path) -> Result<()> {
     Ok(())
 }
 
-fn checkpoint(stage: &Path, work: &Path, guard: &Guard, index: usize) -> Result<()> {
+fn checkpoint(stage: &Path, work: &Path, guard: &Guard, index: usize, erofs: bool) -> Result<()> {
     let chunks = work.join("chunks");
     fs::create_dir_all(&chunks)?;
     let complete = chunks.join(format!("{index:06}.tar.zst"));
     let tmp = chunks.join(format!("{index:06}.tmp"));
     remove_any(&tmp)?;
     let mut cmd = Command::new("tar");
-    cmd.args(["-b", "128", "-c", "-I", "zstd -T0 -5", "-f"])
-        .arg(&tmp).arg("-C").arg(stage).arg(".");
+    cmd.args(["-b", if erofs { "1" } else { "128" }, "-c", "-I", "zstd -T0 -5", "-f"])
+        .arg(&tmp).arg("-C").arg(stage);
+    if erofs {
+        cmd.arg("--");
+        let mut entries = fs::read_dir(stage)?.map(|e| e.map(|e| e.file_name()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        entries.sort();
+        for entry in entries { cmd.arg(entry); }
+    } else { cmd.arg("."); }
     guard.run(cmd)?;
     File::open(&tmp)?.sync_all()?;
     fs::rename(&tmp, &complete)?;
@@ -265,18 +272,27 @@ fn chunk_file(work: &Path, index: usize) -> PathBuf {
     if zst.is_file() { zst } else { work.join(format!("chunks/{index:06}.tar.xz")) }
 }
 
-fn stream_chunk(archive: &Path, sink: &mut impl Write, guard: &Guard) -> Result<()> {
+fn stream_chunk(archive: &Path, sink: &mut impl Write, guard: &Guard, erofs: bool) -> Result<()> {
     let codec = if archive.extension() == Some(std::ffi::OsStr::new("zst")) { "zstd" } else { "xz" };
     let mut child = Command::new(codec).arg("-dc").arg(archive)
         .stdout(Stdio::piped()).spawn()?;
     let result: Result<()> = (|| {
         let mut buf = [0u8; 64 * 1024];
+        let mut tail = Vec::new();
         loop {
             let n = child.stdout.as_mut().ok_or("decompress output unavailable")?.read(&mut buf)?;
             if n == 0 { break; }
             guard.check()?;
-            sink.write_all(&buf[..n])?;
+            if !erofs { sink.write_all(&buf[..n])?; continue; }
+            tail.extend_from_slice(&buf[..n]);
+            if tail.len() > 1024 {
+                let len = tail.len() - 1024;
+                sink.write_all(&tail[..len])?;
+                tail.copy_within(len.., 0);
+                tail.truncate(1024);
+            }
         }
+        if erofs && tail != [0u8; 1024] { return Err("invalid EROFS tar checkpoint trailer".into()); }
         Ok(())
     })();
     if result.is_err() { let _ = child.kill(); }
@@ -297,7 +313,7 @@ fn squashfs(partial: &Path, work: &Path, guard: &Guard, count: usize) -> Result<
     let result: Result<()> = (|| {
         let mut sink = child.stdin.take().ok_or("sqfstar stdin unavailable")?;
         for i in 0..count {
-            stream_chunk(&chunk_file(work, i), &mut sink, guard)?;
+            stream_chunk(&chunk_file(work, i), &mut sink, guard, false)?;
         }
         Ok(())
     })();
@@ -317,10 +333,36 @@ fn squashfs(partial: &Path, work: &Path, guard: &Guard, count: usize) -> Result<
     Ok(())
 }
 
-fn marker(image: &Path, index: usize) -> Option<String> {
-    let output = Command::new("unsquashfs").arg("-cat").arg(image)
-        .arg(format!(".source-image/commits/{index:06}"))
-        .stderr(Stdio::null()).output().ok()?;
+
+fn erofs_image(partial: &Path, work: &Path, guard: &Guard, count: usize) -> Result<()> {
+    remove_any(partial)?;
+    guard.check()?;
+    let mut cmd = Command::new("mkfs.erofs");
+    cmd.args(["-zlzma,level=109,dictsize=8388608", "-C1048576", "-Efragments,ztailpacking",
+        "--all-root", "--tar=f", "--sort=none", "--quiet"]).arg(partial).env("TMPDIR", work);
+    let mut child = cmd.stdin(Stdio::piped()).stderr(File::create(work.join("mkfs.erofs.log"))?).spawn()?;
+    let result: Result<()> = (|| {
+        let mut sink = child.stdin.take().ok_or("mkfs.erofs stdin unavailable")?;
+        for i in 0..count { stream_chunk(&chunk_file(work, i), &mut sink, guard, true)?; }
+        sink.write_all(&[0u8; 1024])?;
+        Ok(())
+    })();
+    if result.is_err() { let _ = child.kill(); }
+    let status = child.wait()?;
+    let messages = fs::read_to_string(work.join("mkfs.erofs.log"))?;
+    if !status.success() { eprintln!("{messages}"); }
+    result?;
+    if !status.success() { return Err(format!("mkfs.erofs failed: {status}").into()); }
+    guard.check()?;
+    File::open(partial)?.sync_all()?;
+    Ok(())
+}
+
+fn marker(image: &Path, index: usize, erofs: bool) -> Option<String> {
+    let mut cmd = Command::new(if erofs { "dump.erofs" } else { "unsquashfs" });
+    if erofs { cmd.arg("--cat").arg(format!("--path=.source-image/commits/{index:06}")).arg(image); }
+    else { cmd.arg("-cat").arg(image).arg(format!(".source-image/commits/{index:06}")); }
+    let output = cmd.stderr(Stdio::null()).output().ok()?;
     if !output.status.success() { return None; }
     let commit = std::str::from_utf8(&output.stdout).ok()?.trim();
     if oid(commit) { Some(commit.to_string()) } else { None }
@@ -335,18 +377,18 @@ fn finish_checkpoint(state: &mut State, path: &Path, work: &Path,
     Ok(())
 }
 
-fn build(raw: bool) -> Result<()> {
+fn build(raw: bool, erofs: bool) -> Result<()> {
     let plan_bytes = fs::read(PLAN)?;
     let plan: Plan = serde_json::from_slice(&plan_bytes)?;
     validate(&plan)?;
     if raw && plan.projects.windows(2).any(|p| p[0].path >= p[1].path) {
         return Err("raw mode requires projects sorted by path".into());
     }
-    let work = if raw { "raw-workdir" } else { WORK };
+    let work = if raw { "raw-workdir" } else if erofs { "erofs-workdir" } else { WORK };
     fs::create_dir_all(work)?;
     let work = fs::canonicalize(work)?;
     let root = fs::canonicalize(".")?;
-    let output = root.join(OUTPUT);
+    let output = root.join(if erofs { "lineage.erofs" } else { OUTPUT });
     let lock = OpenOptions::new().create(true).read(true).write(true).open(work.join(".lock"))?;
     lock.try_lock_exclusive()?;
     let saved_plan = work.join(PLAN);
@@ -370,7 +412,7 @@ fn build(raw: bool) -> Result<()> {
     if state.commits.len() > plan.projects.len() { return Err("invalid checkpoint count".into()); }
     let guard = Guard { root, floor: if raw { RESERVE } else { RESERVE.max(
         state.initial_free.saturating_sub(BUDGET - RESERVE)) } };
-    let partial = output.with_extension("squashfs.partial");
+    let partial = output.with_extension(if erofs { "erofs.partial" } else { "squashfs.partial" });
     if !raw && output.exists() {
         if state.commits.len() != plan.projects.len() {
             return Err("final output already exists".into());
@@ -428,7 +470,7 @@ fn build(raw: bool) -> Result<()> {
                 remove_any(&work.join(format!("downloads/{i:06}")))?;
             } else {
                 pending = Some(scope.spawn(move || {
-                    checkpoint(&stage, work, guard, i)?;
+                    checkpoint(&stage, work, guard, i, erofs)?;
                     Ok(sha)
                 }));
             }
@@ -450,10 +492,11 @@ fn build(raw: bool) -> Result<()> {
         return Ok(());
     }
     eprintln!("assembling {} projects", plan.projects.len());
-    squashfs(&partial, &work, &guard, plan.projects.len())?;
-    if marker(&partial, 0).as_deref() != state.commits.first().map(String::as_str)
-        || marker(&partial, plan.projects.len() - 1).as_deref() != state.commits.last().map(String::as_str) {
-        return Err("SquashFS commit markers missing".into());
+    if erofs { erofs_image(&partial, &work, &guard, plan.projects.len())?; }
+    else { squashfs(&partial, &work, &guard, plan.projects.len())?; }
+    if marker(&partial, 0, erofs).as_deref() != state.commits.first().map(String::as_str)
+        || marker(&partial, plan.projects.len() - 1, erofs).as_deref() != state.commits.last().map(String::as_str) {
+        return Err("filesystem commit markers missing".into());
     }
     guard.check()?;
     fs::hard_link(&partial, &output)?;
@@ -464,12 +507,13 @@ fn build(raw: bool) -> Result<()> {
 }
 
 fn main() {
-    let raw = match std::env::args().skip(1).collect::<Vec<_>>().as_slice() {
-        [] => false,
-        [flag] if flag == "--raw" => true,
-        _ => { eprintln!("ERROR: expected --raw or no arguments"); std::process::exit(1); }
+    let (raw, erofs) = match std::env::args().skip(1).collect::<Vec<_>>().as_slice() {
+        [] => (false, false),
+        [flag] if flag == "--raw" => (true, false),
+        [flag] if flag == "--erofs" => (false, true),
+        _ => { eprintln!("ERROR: expected --raw, --erofs or no arguments"); std::process::exit(1); }
     };
-    if let Err(err) = build(raw) { eprintln!("ERROR: {err}"); std::process::exit(1); }
+    if let Err(err) = build(raw, erofs) { eprintln!("ERROR: {err}"); std::process::exit(1); }
 }
 
 #[cfg(test)]
@@ -496,6 +540,28 @@ mod tests {
                        format!("{sha}\n"));
         }
         fs::remove_dir_all(work).unwrap();
+    }
+    #[test]
+    fn erofs_chunks_form_one_tar() {
+        let root = std::env::temp_dir().join(format!("lineage-erofs-chunks-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let guard = Guard { root: root.clone(), floor: 0 };
+        for i in 0..2 {
+            let stage = root.join(format!("stage{i}"));
+            fs::create_dir(&stage).unwrap();
+            fs::write(stage.join(format!("file{i}")), vec![i as u8; 4096]).unwrap();
+            checkpoint(&stage, &root, &guard, i, true).unwrap();
+        }
+        let mut tar = Vec::new();
+        for i in 0..2 { stream_chunk(&chunk_file(&root, i), &mut tar, &guard, true).unwrap(); }
+        tar.extend_from_slice(&[0u8; 1024]);
+        let file = root.join("combined.tar");
+        fs::write(&file, tar).unwrap();
+        let output = Command::new("tar").arg("-tf").arg(&file).output().unwrap();
+        assert!(output.status.success());
+        let names = String::from_utf8(output.stdout).unwrap();
+        assert!(names.contains("file0") && names.contains("file1"));
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn placements_are_repeatable() {
