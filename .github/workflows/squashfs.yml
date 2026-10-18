@@ -12,7 +12,7 @@ jobs:
       - uses: ./.github/actions/zram
       - run: |
           export id=$(gh run list -w builder.yml -s success -L 1 --json databaseId -q '.[0].databaseId')
-          gh run download $id -n squashfs-builder
+          gh run download $id -n lineage-src-downloader
         env:
           GH_TOKEN: ${{ github.token }}
       - uses: justinthelaw/maximize-github-runner-space@v0.12.3
@@ -23,10 +23,10 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y squashfs-tools oras
-          chmod +x squashfs-builder
+          chmod +x lineage-src-downloader
       - name: squashfs
         run: |
-          ./squashfs-builder
+          ./lineage-src-downloader
       - name: upload
         run: |
           ls -lh lineage.squashfs
