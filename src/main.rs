@@ -134,7 +134,7 @@ impl Guard {
                 let _ = child.wait();
                 return Err(err);
             }
-            thread::sleep(Duration::from_millis(250));
+            thread::sleep(Duration::from_millis(25));
         }
     }
 }
@@ -255,7 +255,7 @@ fn stage_project(p: &Project, all: &[Project], work: &Path, guard: &Guard,
     let repo = work.join(format!("repos/{index:06}.git"));
     let mut cmd = git(&repo);
     cmd.arg(format!("--work-tree={}", dest.display()))
-        .args(["-c", "core.bare=false", "checkout", "--quiet", "--detach", "-f", sha]);
+        .args(["-c", "core.bare=false", "-c", "checkout.workers=4", "checkout", "--quiet", "--detach", "-f", sha]);
     guard.run(cmd)?;
     let prefix = format!("{}/", p.path);
     for child in all {
@@ -319,7 +319,7 @@ fn checkpoint(stage: &Path, work: &Path, guard: &Guard, index: usize) -> Result<
     let tmp = chunks.join(format!("{index:06}.tmp"));
     remove_any(&tmp)?;
     let mut cmd = Command::new("tar");
-    cmd.args(["-b", "1", "-c", "-I", "zstd -T0 -5", "-f"])
+    cmd.args(["-b", "128", "-c", "-I", "zstd -T0 -5", "-f"])
         .arg(&tmp).arg("-C").arg(stage).arg(".");
     guard.run(cmd)?;
     File::open(&tmp)?.sync_all()?;
@@ -339,20 +339,11 @@ fn stream_chunk(archive: &Path, sink: &mut impl Write, guard: &Guard) -> Result<
         .stdout(Stdio::piped()).spawn()?;
     let result: Result<()> = (|| {
         let mut buf = [0u8; 64 * 1024];
-        let mut tail = Vec::with_capacity(buf.len() + 1024);
         loop {
             let n = child.stdout.as_mut().ok_or("decompress output unavailable")?.read(&mut buf)?;
             if n == 0 { break; }
             guard.check()?;
-            tail.extend_from_slice(&buf[..n]);
-            if tail.len() > 1024 {
-                let ready = tail.len() - 1024;
-                sink.write_all(&tail[..ready])?;
-                tail.drain(..ready);
-            }
-        }
-        if tail.len() != 1024 || tail.iter().any(|x| *x != 0) {
-            return Err(format!("invalid tar footer: {}", archive.display()).into());
+            sink.write_all(&buf[..n])?;
         }
         Ok(())
     })();
@@ -366,18 +357,16 @@ fn stream_chunk(archive: &Path, sink: &mut impl Write, guard: &Guard) -> Result<
 fn squashfs(partial: &Path, work: &Path, guard: &Guard, count: usize) -> Result<()> {
     remove_any(partial)?;
     guard.check()?;
-    let mut cmd = Command::new("mksquashfs");
-    cmd.arg("-").arg(partial).args(["-tar", "-comp", "xz", "-b", "1M",
-        "-tailends", "-no-progress", "-exit-on-error", "-all-root",
-        "-noappend", "-Xdict-size", "100%"]);
-    let log = work.join("mksquashfs.log");
+    let mut cmd = Command::new("sqfstar");
+    cmd.args(["-ignore-zeros", "-comp", "xz", "-b", "1M", "-no-progress",
+        "-exit-on-error", "-all-root", "-exports", "-Xdict-size", "100%"]).arg(partial);
+    let log = work.join("sqfstar.log");
     let mut child = cmd.stdin(Stdio::piped()).stderr(File::create(&log)?).spawn()?;
     let result: Result<()> = (|| {
-        let mut sink = child.stdin.take().ok_or("mksquashfs stdin unavailable")?;
+        let mut sink = child.stdin.take().ok_or("sqfstar stdin unavailable")?;
         for i in 0..count {
             stream_chunk(&chunk_file(work, i), &mut sink, guard)?;
         }
-        sink.write_all(&[0; 1024])?;
         Ok(())
     })();
     if result.is_err() { let _ = child.kill(); }
@@ -390,7 +379,7 @@ fn squashfs(partial: &Path, work: &Path, guard: &Guard, count: usize) -> Result<
         }
     }
     result?;
-    if !status.success() { return Err(format!("mksquashfs failed: {status}").into()); }
+    if !status.success() { return Err(format!("sqfstar failed: {status}").into()); }
     guard.check()?;
     File::open(partial)?.sync_all()?;
     Ok(())
