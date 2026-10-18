@@ -200,14 +200,17 @@ pub fn fetch(p: &Project, dir: &Path, guard: &Guard) -> Result<String> {
     else if oid(&p.revision) { p.revision.to_ascii_lowercase() }
     else {
         let revision = encode(&p.revision, false);
-        let (url, key) = if let Some(repo) = repo {
-            (format!("https://api.github.com/repos/{repo}/commits/{revision}"), "sha")
-        } else { (format!("{}/+/{revision}?format=JSON", p.url.trim_end_matches('/')), "commit") };
-        let bytes = request(curl(&url), guard)?;
-        let bytes = if repo.is_some() { bytes.as_slice() }
-            else { bytes.splitn(2, |b| *b == b'\n').nth(1).ok_or("invalid Gitiles JSON")? };
-        let value: Value = serde_json::from_slice(bytes)?;
-        value[key].as_str().ok_or("revision does not resolve to a commit")?.to_string()
+        if let Some(repo) = repo {
+            let mut cmd = curl(&format!("https://api.github.com/repos/{repo}/commits/{revision}"));
+            cmd.args(["--header", "Accept: application/vnd.github.sha"]);
+            String::from_utf8(request(cmd, guard)?)?.trim().to_string()
+        } else {
+            let url = format!("{}/+/{revision}?format=JSON", p.url.trim_end_matches('/'));
+            let bytes = request(curl(&url), guard)?;
+            let bytes = bytes.splitn(2, |b| *b == b'\n').nth(1).ok_or("invalid Gitiles JSON")?;
+            let value: Value = serde_json::from_slice(bytes)?;
+            value["commit"].as_str().ok_or("revision does not resolve to a commit")?.to_string()
+        }
     };
     if !oid(&sha) || oid(&p.revision) && !sha.eq_ignore_ascii_case(&p.revision) {
         return Err(format!("revision mismatch for {}", p.path).into());
