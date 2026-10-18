@@ -6,7 +6,15 @@ jobs:
     runs-on: ubuntu-26.04
     permissions:
       contents: read
-      packages: read
+      packages: write
+    concurrency:
+      group: lineage-ccache-spacewar-lineage-24
+      cancel-in-progress: false
+    env:
+      USE_CCACHE: '1'
+      CCACHE_EXEC: /usr/bin/ccache
+      CCACHE_DIR: ${{ runner.temp }}/ccache
+      CCACHE_MAXSIZE: 50GiB
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/zram
@@ -24,12 +32,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          oras login ghcr.io --username=$GITHUB_ACTOR --password=${{ github.token }}
+          printf '%s' "$GH_TOKEN" | oras login ghcr.io --username="$GITHUB_ACTOR" --password-stdin
           oras pull ghcr.io/gmankab/lineage-squashfs:latest
           for part in part-*; do
             cat $part >> lineage.squashfs
             rm $part
           done
+      - name: restore ccache
+        run: |
+          set -euo pipefail
+          mkdir -p "$CCACHE_DIR"
+          if oras manifest fetch ghcr.io/gmankab/lineage-ccache:spacewar-lineage-24 > "$RUNNER_TEMP/ccache-manifest.json" 2> "$RUNNER_TEMP/ccache-pull.log"; then
+            jq -er '.layers | sort_by(.annotations["org.opencontainers.image.title"])[] | .digest' "$RUNNER_TEMP/ccache-manifest.json" |
+              while read -r digest; do
+                oras blob fetch "ghcr.io/gmankab/lineage-ccache@$digest" --output -
+              done | tar -xf - -C "$CCACHE_DIR"
+          elif grep -Eqi 'MANIFEST_UNKNOWN|NAME_UNKNOWN|: not found$|404 Not Found' "$RUNNER_TEMP/ccache-pull.log"; then
+            echo 'No ccache image yet; starting with an empty cache'
+          else
+            cat "$RUNNER_TEMP/ccache-pull.log" >&2
+            exit 1
+          fi
+          ccache -M "$CCACHE_MAXSIZE"
       - name: writable source overlay
         run: |
           mkdir source-ro source upper work
@@ -47,18 +71,28 @@ jobs:
           git clone -q --depth=1 -b lineage-24.0 https://github.com/LineageOS/android_hardware_nothing hardware/nothing
           git clone -q --depth=1 -b lineage-24.0 https://github.com/TheMuppets/proprietary_vendor_nothing_Spacewar vendor/nothing/Spacewar
       - name: build lineageos
+        id: build
+        timeout-minutes: 300
         working-directory: source
-        env:
-          USE_CCACHE: '1'
-          CCACHE_EXEC: /usr/bin/ccache
         run: |
           set -eo pipefail
-          ccache -M 8G
           export SOONG_UI_NINJA_ARGS=-j4
           source build/envsetup.sh
           breakfast Spacewar
           brunch Spacewar
           ls -lh out/target/product/Spacewar/lineage-*.zip
+      - name: save ccache
+        if: ${{ !cancelled() && (steps.build.outcome == 'success' || steps.build.outcome == 'failure') }}
+        run: |
+          set -euo pipefail
+          ccache --cleanup
+          ccache -s
+          mkdir -p "$RUNNER_TEMP/ccache-oci"
+          tar -C "$CCACHE_DIR" --remove-files -cf - . | split -b 1G -d -a 3 - "$RUNNER_TEMP/ccache-oci/part-"
+          cd "$RUNNER_TEMP/ccache-oci"
+          oras push --artifact-type application/vnd.lineage.ccache --annotation "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" ghcr.io/gmankab/lineage-ccache:spacewar-lineage-24 part-*
+          rm part-*
       - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         with:
           path: source/out/target/product/Spacewar/lineage-*.zip
