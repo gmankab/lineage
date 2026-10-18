@@ -13,7 +13,7 @@ jobs:
     env:
       USE_CCACHE: '1'
       CCACHE_EXEC: /usr/bin/ccache
-      CCACHE_DIR: ${{ runner.temp }}/ccache
+      CCACHE_DIR: ${{ github.workspace }}/ccache
       CCACHE_MAXSIZE: 50GiB
     steps:
       - uses: actions/checkout@v7
@@ -76,10 +76,9 @@ jobs:
         working-directory: source
         run: |
           set -eo pipefail
-          export SOONG_UI_NINJA_ARGS=-j4
           source build/envsetup.sh
           breakfast Spacewar
-          brunch Spacewar
+          brunch Spacewar -j4
           ls -lh out/target/product/Spacewar/lineage-*.zip
       - name: save ccache
         if: ${{ !cancelled() && (steps.build.outcome == 'success' || steps.build.outcome == 'failure') }}
