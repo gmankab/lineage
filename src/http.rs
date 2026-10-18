@@ -59,9 +59,11 @@ fn curl(url: &str) -> Command {
 
 fn request(mut cmd: Command, guard: &Guard) -> Result<Vec<u8>> {
     guard.check()?;
-    let out = cmd.args(["--max-time", "120"]).output()?;
+    let out = cmd.args(["--max-time", "120", "--retry", "8", "--retry-all-errors",
+        "--retry-max-time", "180"]).output()?;
     guard.check()?;
-    if !out.status.success() { return Err(format!("HTTP metadata request failed ({})", out.status).into()); }
+    if !out.status.success() { return Err(format!("HTTP metadata request failed ({}): {}",
+        out.status, String::from_utf8_lossy(&out.stderr).trim()).into()); }
     Ok(out.stdout)
 }
 
