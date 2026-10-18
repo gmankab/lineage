@@ -1,7 +1,7 @@
 use fs2::{available_space, FileExt};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     error::Error,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
@@ -26,7 +26,7 @@ struct Plan {
     projects: Vec<Project>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Project {
     path: String,
     url: String,
@@ -37,7 +37,7 @@ struct Project {
     linkfiles: Vec<Placement>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Placement {
     src: String,
     dest: String,
@@ -176,26 +176,20 @@ fn fetched_commit(repo: &Path) -> Option<String> {
     git_output(cmd).ok()
 }
 
-fn fetch(p: &Project, work: &Path, guard: &Guard) -> Result<String> {
-    let repo = work.join("active.git");
-    let owner = work.join("active-project");
-    if fs::read_to_string(&owner).ok().as_deref() != Some(p.path.as_str()) {
-        remove_any(&repo)?;
-        remove_any(&owner)?;
-        guard.run({ let mut c = Command::new("git"); c.args(["init", "--bare", "--quiet"]).arg(&repo); c })?;
-        guard.run({ let mut c = git(&repo); c.args(["remote", "add", "origin", &p.url]); c })?;
-        guard.run({
-            let mut c = git(&repo);
-            c.arg("-c").arg(format!("core.hooksPath={}", repo.join("hooks").display()));
-            c.args(["lfs", "install", "--local"]).stdout(Stdio::null());
-            c
-        })?;
-        fs::write(&owner, &p.path)?;
-    }
-    if let Some(sha) = fetched_commit(&repo) {
-        set_head(&repo, &sha, guard)?;
+fn fetch(p: &Project, repo: &Path, guard: &Guard) -> Result<String> {
+    fs::create_dir_all(repo.parent().ok_or("invalid repo path")?)?;
+    if let Some(sha) = fetched_commit(repo) {
+        set_head(repo, &sha, guard)?;
         return Ok(sha);
     }
+    guard.run({ let mut c = Command::new("git"); c.args(["init", "--bare", "--quiet"]).arg(repo); c })?;
+    guard.run({ let mut c = git(repo); c.args(["config", "remote.origin.url", &p.url]); c })?;
+    guard.run({
+        let mut c = git(repo);
+        c.arg("-c").arg(format!("core.hooksPath={}", repo.join("hooks").display()));
+        c.args(["lfs", "install", "--local"]).stdout(Stdio::null());
+        c
+    })?;
     let spec = format!("+{}:{SNAPSHOT}", p.revision);
     let mut failure = None;
     for attempt in 1..=4 {
@@ -258,7 +252,7 @@ fn stage_project(p: &Project, all: &[Project], work: &Path, guard: &Guard,
     let dummy = format!("{}/dummy", p.path);
     let dest = check_parents(&stage, &dummy)?.parent().ok_or("bad project path")?.to_path_buf();
     fs::create_dir_all(&dest)?;
-    let repo = work.join("active.git");
+    let repo = work.join(format!("repos/{index:06}.git"));
     let mut cmd = git(&repo);
     cmd.arg(format!("--work-tree={}", dest.display()))
         .args(["-c", "core.bare=false", "checkout", "--quiet", "--detach", "-f", sha]);
@@ -475,18 +469,31 @@ fn build() -> Result<()> {
     }
     guard.check()?;
     let mut pending: Option<(String, thread::JoinHandle<_>)> = None;
+    let mut downloads = VecDeque::new();
+    let mut next = state.commits.len();
     for (i, p) in plan.projects.iter().enumerate().skip(state.commits.len()) {
+        while next < plan.projects.len() && downloads.len() < 16 {
+            let project = plan.projects[next].clone();
+            let repo = work.join(format!("repos/{next:06}.git"));
+            let worker_guard = Guard { root: guard.root.clone(), floor: guard.floor };
+            downloads.push_back(thread::spawn(move || {
+                fetch(&project, &repo, &worker_guard).map_err(|e| e.to_string())
+            }));
+            next += 1;
+        }
         eprintln!("[{}/{}] {}", i + 1, plan.projects.len(), p.path);
         if pending.as_ref().is_some_and(|(_, worker)| worker.is_finished()) {
             let (sha, worker) = pending.take().unwrap();
             finish_checkpoint(&mut state, &state_path, &work, sha, worker)?;
         }
-        let fetched = fetch(p, &work, &guard);
+        let fetched = downloads.pop_front().unwrap().join()
+            .map_err(|_| "download worker panicked")?;
         if let Some((sha, worker)) = pending.take() {
             finish_checkpoint(&mut state, &state_path, &work, sha, worker)?;
         }
         let sha = fetched?;
         let stage = stage_project(p, &plan.projects, &work, &guard, &sha, i, &plan_bytes)?;
+        remove_any(&work.join(format!("repos/{i:06}.git")))?;
         let work_dir = work.clone();
         let worker_guard = Guard { root: guard.root.clone(), floor: guard.floor };
         pending = Some((sha, thread::spawn(move || {
@@ -498,6 +505,7 @@ fn build() -> Result<()> {
     }
     remove_any(&work.join("active.git"))?;
     remove_any(&work.join("active-project"))?;
+    remove_any(&work.join("repos"))?;
     eprintln!("assembling {} projects", plan.projects.len());
     squashfs(&partial, &work, &guard, plan.projects.len())?;
     if marker(&partial, 0).as_deref() != state.commits.first().map(String::as_str)
@@ -525,7 +533,8 @@ mod tests {
         let work = std::env::temp_dir().join(format!("squashfs-empty-{}", std::process::id()));
         fs::create_dir(&work).unwrap();
         let guard = Guard { root: work.clone(), floor: 0 };
-        let repo = work.join("active.git");
+        let repo = work.join("repos/000000.git");
+        fs::create_dir_all(repo.parent().unwrap()).unwrap();
         let mut init = Command::new("git");
         init.args(["init", "--bare", "--quiet"]).arg(&repo);
         guard.run(init).unwrap();
