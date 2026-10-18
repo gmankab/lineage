@@ -61,4 +61,4 @@ jobs:
           ls -lh out/target/product/Spacewar/lineage-*.zip
       - uses: actions/upload-artifact@v7
         with:
-          path: out/target/product/Spacewar/lineage-*.zip
+          path: source/out/target/product/Spacewar/lineage-*.zip
