@@ -1,9 +1,9 @@
 [package]
-name = "squashfs-builder"
+name = "lineage-src-downloader"
 version = "26.0.0"
 edition = "2024"
 license = "AGPL-3.0-only"
-description = "Restartable LineageOS SquashFS builder"
+description = "lineageos source code downloader"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
