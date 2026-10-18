@@ -201,13 +201,13 @@ pub fn fetch(p: &Project, dir: &Path, guard: &Guard) -> Result<String> {
     let sha: String = if pin.is_file() { serde_json::from_reader(File::open(&pin)?)? }
     else if oid(&p.revision) { p.revision.to_ascii_lowercase() }
     else {
-        let revision = encode(&p.revision, false);
+        let revision = encode(&p.revision, repo.is_none());
         if let Some(repo) = repo {
             let mut cmd = curl(&format!("https://api.github.com/repos/{repo}/commits/{revision}"));
             cmd.args(["--header", "Accept: application/vnd.github.sha"]);
             String::from_utf8(request(cmd, guard)?)?.trim().to_string()
         } else {
-            let url = format!("{}/+/{revision}?format=JSON", p.url.trim_end_matches('/'));
+            let url = format!("{}/+show/{revision}/?format=JSON", p.url.trim_end_matches('/'));
             let bytes = request(curl(&url), guard)?;
             let bytes = bytes.splitn(2, |b| *b == b'\n').nth(1).ok_or("invalid Gitiles JSON")?;
             let value: Value = serde_json::from_slice(bytes)?;
