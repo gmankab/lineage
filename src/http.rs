@@ -9,6 +9,9 @@ use std::{
     os::unix::{ffi::OsStrExt, fs::{symlink, PermissionsExt}},
     path::Path,
     process::Command,
+    sync::Mutex,
+    thread,
+    time::{Duration, Instant},
 };
 
 #[derive(Deserialize, Serialize)]
@@ -207,6 +210,14 @@ pub fn fetch(p: &Project, dir: &Path, guard: &Guard) -> Result<String> {
             cmd.args(["--header", "Accept: application/vnd.github.sha"]);
             String::from_utf8(request(cmd, guard)?)?.trim().to_string()
         } else {
+            static NEXT: Mutex<Option<Instant>> = Mutex::new(None);
+            {
+                let mut next = NEXT.lock().map_err(|_| "Gitiles limiter poisoned")?;
+                if let Some(when) = *next {
+                    thread::sleep(when.saturating_duration_since(Instant::now()));
+                }
+                *next = Some(Instant::now() + Duration::from_millis(500));
+            }
             let url = format!("{}/+show/{revision}/?format=JSON", p.url.trim_end_matches('/'));
             let bytes = request(curl(&url), guard)?;
             let bytes = bytes.splitn(2, |b| *b == b'\n').nth(1).ok_or("invalid Gitiles JSON")?;
