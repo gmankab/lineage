@@ -243,12 +243,13 @@ fn relative_link(dest: &str, target: &str) -> String {
 }
 
 fn stage_project(p: &Project, all: &[Project], work: &Path, guard: &Guard,
-                 sha: &str, index: usize, plan_bytes: &[u8]) -> Result<PathBuf> {
-    let stage = work.join("stage");
-    remove_any(&stage)?;
-    fs::create_dir(&stage)?;
+                 sha: &str, index: usize, plan_bytes: &[u8], raw: bool) -> Result<PathBuf> {
+    let stage = work.join(if raw { "source" } else { "stage" });
+    if !raw { remove_any(&stage)?; }
+    fs::create_dir_all(&stage)?;
     let dummy = format!("{}/dummy", p.path);
     let dest = check_parents(&stage, &dummy)?.parent().ok_or("bad project path")?.to_path_buf();
+    if raw { remove_any(&dest)?; }
     fs::create_dir_all(&dest)?;
     let repo = work.join(format!("repos/{index:06}.git"));
     let mut cmd = git(&repo);
@@ -274,6 +275,17 @@ fn stage_project(p: &Project, all: &[Project], work: &Path, guard: &Guard,
             }
         }
     }
+    if !raw { place_files(p, &stage)?; }
+    let dir = stage.join(".source-image/commits");
+    fs::create_dir_all(&dir)?;
+    fs::write(dir.join(format!("{index:06}")), format!("{sha}\n"))?;
+    if index == 0 { fs::write(stage.join(".source-image/plan.json"), plan_bytes)?; }
+    guard.check()?;
+    Ok(stage)
+}
+
+fn place_files(p: &Project, stage: &Path) -> Result<()> {
+    let dest = stage.join(&p.path);
     for item in &p.copyfiles {
         let source = dest.join(&item.src);
         if !fs::symlink_metadata(&source)?.is_file() {
@@ -302,12 +314,7 @@ fn stage_project(p: &Project, all: &[Project], work: &Path, guard: &Guard,
         let target = if src == "." { p.path.clone() } else { format!("{}/{}", p.path, src) };
         std::os::unix::fs::symlink(relative_link(&item.dest, &target), to)?;
     }
-    let dir = stage.join(".source-image/commits");
-    fs::create_dir_all(&dir)?;
-    fs::write(dir.join(format!("{index:06}")), format!("{sha}\n"))?;
-    if index == 0 { fs::write(stage.join(".source-image/plan.json"), plan_bytes)?; }
-    guard.check()?;
-    Ok(stage)
+    Ok(())
 }
 
 fn checkpoint(stage: &Path, work: &Path, guard: &Guard, index: usize) -> Result<()> {
@@ -400,12 +407,16 @@ fn finish_checkpoint(state: &mut State, path: &Path, work: &Path,
     Ok(())
 }
 
-fn build() -> Result<()> {
+fn build(raw: bool) -> Result<()> {
     let plan_bytes = fs::read(PLAN)?;
     let plan: Plan = serde_json::from_slice(&plan_bytes)?;
     validate(&plan)?;
-    fs::create_dir_all(WORK)?;
-    let work = fs::canonicalize(WORK)?;
+    if raw && plan.projects.windows(2).any(|p| p[0].path >= p[1].path) {
+        return Err("raw mode requires projects sorted by path".into());
+    }
+    let work = if raw { "raw-workdir" } else { WORK };
+    fs::create_dir_all(work)?;
+    let work = fs::canonicalize(work)?;
     let root = fs::canonicalize(".")?;
     let output = root.join(OUTPUT);
     let lock = OpenOptions::new().create(true).read(true).write(true).open(work.join(".lock"))?;
@@ -429,10 +440,10 @@ fn build() -> Result<()> {
         state
     };
     if state.commits.len() > plan.projects.len() { return Err("invalid checkpoint count".into()); }
-    let guard = Guard { root, floor: RESERVE.max(
-        state.initial_free.saturating_sub(BUDGET - RESERVE)) };
+    let guard = Guard { root, floor: if raw { RESERVE } else { RESERVE.max(
+        state.initial_free.saturating_sub(BUDGET - RESERVE)) } };
     let partial = output.with_extension("squashfs.partial");
-    if output.exists() {
+    if !raw && output.exists() {
         if state.commits.len() != plan.projects.len() {
             return Err("final output already exists".into());
         }
@@ -447,8 +458,13 @@ fn build() -> Result<()> {
         eprintln!("already complete: {}", output.display());
         return Ok(());
     }
-    for i in 0..state.commits.len() {
-        if !chunk_file(&work, i).is_file() {
+    for (i, sha) in state.commits.iter().enumerate() {
+        if raw {
+            let marker = work.join(format!("source/.source-image/commits/{i:06}"));
+            if fs::read_to_string(marker)?.trim() != sha {
+                return Err(format!("missing raw project {i}").into());
+            }
+        } else if !chunk_file(&work, i).is_file() {
             return Err(format!("missing checkpoint {i}").into());
         }
     }
@@ -476,12 +492,17 @@ fn build() -> Result<()> {
                 finish_checkpoint(&mut state, &state_path, work, worker)?;
             }
             let sha = fetched?;
-            let stage = stage_project(p, &plan.projects, work, guard, &sha, i, &plan_bytes)?;
+            let stage = stage_project(p, &plan.projects, work, guard, &sha, i, &plan_bytes, raw)?;
             remove_any(&work.join(format!("repos/{i:06}.git")))?;
-            pending = Some(scope.spawn(move || {
-                checkpoint(&stage, work, guard, i)?;
-                Ok(sha)
-            }));
+            if raw {
+                state.commits.push(sha);
+                save_json(&state_path, &state)?;
+            } else {
+                pending = Some(scope.spawn(move || {
+                    checkpoint(&stage, work, guard, i)?;
+                    Ok(sha)
+                }));
+            }
         }
         if let Some(worker) = pending {
             finish_checkpoint(&mut state, &state_path, work, worker)?;
@@ -489,6 +510,12 @@ fn build() -> Result<()> {
         Ok(())
     })?;
     remove_any(&work.join("repos"))?;
+    if raw {
+        let source = work.join("source");
+        for p in &plan.projects { place_files(p, &source)?; }
+        eprintln!("COMPLETE: {}", source.display());
+        return Ok(());
+    }
     eprintln!("assembling {} projects", plan.projects.len());
     squashfs(&partial, &work, &guard, plan.projects.len())?;
     if marker(&partial, 0).as_deref() != state.commits.first().map(String::as_str)
@@ -504,8 +531,12 @@ fn build() -> Result<()> {
 }
 
 fn main() {
-    if std::env::args_os().len() != 1 { eprintln!("ERROR: unexpected arguments"); std::process::exit(1); }
-    if let Err(err) = build() { eprintln!("ERROR: {err}"); std::process::exit(1); }
+    let raw = match std::env::args().skip(1).collect::<Vec<_>>().as_slice() {
+        [] => false,
+        [flag] if flag == "--raw" => true,
+        _ => { eprintln!("ERROR: expected --raw or no arguments"); std::process::exit(1); }
+    };
+    if let Err(err) = build(raw) { eprintln!("ERROR: {err}"); std::process::exit(1); }
 }
 
 #[cfg(test)]
@@ -531,12 +562,28 @@ mod tests {
         set_head(&repo, &sha, &guard).unwrap();
         let project = Project { path: "empty".into(), url: "unused".into(),
             revision: sha.clone(), copyfiles: vec![], linkfiles: vec![] };
-        let stage = stage_project(&project, std::slice::from_ref(&project), &work,
-                                  &guard, &sha, 0, b"{}").unwrap();
-        assert!(stage.join("empty").is_dir());
-        assert_eq!(fs::read_to_string(stage.join(".source-image/commits/000000")).unwrap(),
-                   format!("{sha}\n"));
+        for raw in [false, true] {
+            let stage = stage_project(&project, std::slice::from_ref(&project), &work,
+                                      &guard, &sha, 0, b"{}", raw).unwrap();
+            assert!(stage.join("empty").is_dir());
+            assert_eq!(fs::read_to_string(stage.join(".source-image/commits/000000")).unwrap(),
+                       format!("{sha}\n"));
+        }
         fs::remove_dir_all(work).unwrap();
+    }
+    #[test]
+    fn placements_are_repeatable() {
+        let root = std::env::temp_dir().join(format!("lineage-placements-{}", std::process::id()));
+        fs::create_dir_all(root.join("a")).unwrap();
+        fs::write(root.join("a/file"), "source").unwrap();
+        let project = Project { path: "a".into(), url: "unused".into(), revision: "unused".into(),
+            copyfiles: vec![Placement { src: "file".into(), dest: "z/copy".into() }],
+            linkfiles: vec![Placement { src: "file".into(), dest: "z/link".into() }] };
+        for _ in 0..2 { place_files(&project, &root).unwrap(); }
+        assert_eq!(fs::read_to_string(root.join("z/copy")).unwrap(), "source");
+        assert_eq!(fs::metadata(root.join("z/copy")).unwrap().permissions().mode() & 0o222, 0);
+        assert_eq!(fs::read_link(root.join("z/link")).unwrap(), Path::new("../a/file"));
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn path_validation() {
