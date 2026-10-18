@@ -1,0 +1,36 @@
+on:
+  workflow_dispatch: {}
+
+jobs:
+  dwarfs:
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/zram
+      - uses: justinthelaw/maximize-github-runner-space@v0.12.3
+        with:
+          cleanup-profile: max
+          swapfile-size: '0'
+      - name: dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y oras
+          mkdir dwarfs
+          curl -L https://github.com/mhx/dwarfs/releases/download/v0.15.7/dwarfs-0.15.7-Linux-x86_64.tar.xz | tar -xJ -C dwarfs
+          cp dwarfs/dwarfs-0.15.7-Linux-x86_64/bin/mkdwarfs /usr/local/bin/mkdwarfs
+          rm -rf dwarfs
+      - name: dwarfs
+        run: |
+          oras login ghcr.io --username=$GITHUB_ACTOR --password=${{ github.token }}
+          oras pull ghcr.io/gmankab/lineage-squashfs:latest
+          for part in part-*; do
+            cat $part >> lineage.squashfs
+            rm $part
+          done
+          mkdir -p source
+          sudo mount -o loop,ro -t squashfs lineage.squashfs source
+          mkdwarfs -i source -o lineage.dwarfs -l 9 -S 26 -B 16 --pack-metadata=all
+          ls -lh lineage.dwarfs
