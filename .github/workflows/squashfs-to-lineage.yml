@@ -1,0 +1,64 @@
+on:
+  workflow_dispatch: {}
+
+jobs:
+  lineage:
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/zram
+      - name: dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y oras bc bison build-essential ccache curl erofs-utils flex g++-multilib git git-lfs gperf imagemagick protobuf-compiler python3-protobuf python-is-python3 lib32readline-dev lib32z1-dev libdw-dev libelf-dev libgnutls28-dev lz4 libsdl1.2-dev libssl-dev libxml2-utils lzop pngcrush rsync schedtool xsltproc xxd zip zlib1g-dev
+          git lfs install
+      - uses: justinthelaw/maximize-github-runner-space@v0.12.3
+        with:
+          skip-components: large-packages,android,java,rust,cached-tools
+          cleanup-profile: max
+          swapfile-size: '0'
+      - name: pull squashfs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          oras login ghcr.io --username=$GITHUB_ACTOR --password=${{ github.token }}
+          oras pull ghcr.io/gmankab/lineage-squashfs:latest
+          for part in part-*; do
+            cat $part >> lineage.squashfs
+            rm $part
+          done
+      - name: writable source overlay
+        run: |
+          mkdir source-ro source upper work
+          sudo mount -t squashfs -o loop,ro $PWD/lineage.squashfs $PWD/source-ro
+          sudo mount -t overlay overlay -o lowerdir=$PWD/source-ro,upperdir=$PWD/upper,workdir=$PWD/work $PWD/source
+          sudo mkdir -p source/{device/nothing,kernel/nothing,hardware,vendor/nothing}
+          sudo chown $USER source/{.,device/nothing,kernel/nothing,hardware,vendor/nothing}
+      - name: spacewar sources
+        working-directory: source
+        run: |
+          set -e
+          mkdir -p device/nothing kernel/nothing hardware vendor/nothing
+          git clone -q --depth=1 -b lineage-24.0 https://github.com/LineageOS/android_device_nothing_Spacewar device/nothing/Spacewar
+          git clone -q --depth=1 -b lineage-24.0 https://github.com/LineageOS/android_kernel_nothing_sm7325 kernel/nothing/sm7325
+          git clone -q --depth=1 -b lineage-24.0 https://github.com/LineageOS/android_hardware_nothing hardware/nothing
+          git clone -q --depth=1 -b lineage-24.0 https://github.com/TheMuppets/proprietary_vendor_nothing_Spacewar vendor/nothing/Spacewar
+      - name: build lineageos
+        working-directory: source
+        env:
+          USE_CCACHE: '1'
+          CCACHE_EXEC: /usr/bin/ccache
+        run: |
+          set -eo pipefail
+          ccache -M 8G
+          export SOONG_UI_NINJA_ARGS=-j4
+          source build/envsetup.sh
+          breakfast Spacewar
+          brunch Spacewar
+          ls -lh out/target/product/Spacewar/lineage-*.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          path: out/target/product/Spacewar/lineage-*.zip
