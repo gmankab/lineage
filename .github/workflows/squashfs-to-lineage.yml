@@ -78,7 +78,7 @@ jobs:
           set -eo pipefail
           source build/envsetup.sh
           breakfast Spacewar
-          brunch Spacewar -j4
+          m bacon -j4
           ls -lh out/target/product/Spacewar/lineage-*.zip
       - name: save ccache
         if: ${{ !cancelled() && (steps.build.outcome == 'success' || steps.build.outcome == 'failure') }}
