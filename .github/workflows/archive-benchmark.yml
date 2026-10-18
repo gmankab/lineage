@@ -1,0 +1,16 @@
+name: Source archive benchmark
+
+on:
+  workflow_dispatch: {}
+  push: {}
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        method: [git, archive]
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 .github/scripts/archive-benchmark.py '${{ matrix.method }}'
