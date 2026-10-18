@@ -1,0 +1,41 @@
+on:
+  workflow_dispatch: {}
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  raw-to-dwarfs:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/zram
+      - name: deps
+        run: |
+          sudo apt update
+          sudo apt install -y btrfs-progs
+          export id=$(gh run list -w builder.yml -s success -L 1 --json databaseId -q '.[0].databaseId')
+          gh run download $id -n lineage-src-downloader
+          chmod +x lineage-src-downloader
+          mkdir dwarfs
+          curl -fL https://github.com/mhx/dwarfs/releases/download/v0.15.7/dwarfs-0.15.7-Linux-x86_64.tar.xz | tar -xJ -C dwarfs
+          sudo install -m 755 dwarfs/dwarfs-0.15.7-Linux-x86_64/bin/mkdwarfs /usr/local/bin/mkdwarfs
+          rm -rf dwarfs
+      - name: btrfs
+        run: |
+          truncate -s 140G source.btrfs
+          sudo mkfs.btrfs -f source.btrfs
+          mkdir raw-workdir
+          sudo mount -o loop,compress=zstd:15 source.btrfs raw-workdir
+          sudo chown $USER raw-workdir
+      - uses: justinthelaw/maximize-github-runner-space@v0.12.3
+        with:
+          cleanup-profile: max
+          swapfile-size: '0'
+      - name: src download
+        run: |
+          ./lineage-src-downloader --raw
+      - name: dwarfs
+        run: |
+          mkdwarfs -i raw-workdir/source -o lineage.dwarfs -l 9 -S 26 -B 16 --pack-metadata=all
+          ls -lh lineage.dwarfs
