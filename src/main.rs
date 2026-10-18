@@ -187,7 +187,7 @@ fn fetch(p: &Project, work: &Path, guard: &Guard) -> Result<String> {
         guard.run({
             let mut c = git(&repo);
             c.arg("-c").arg(format!("core.hooksPath={}", repo.join("hooks").display()));
-            c.args(["lfs", "install", "--local"]);
+            c.args(["lfs", "install", "--local"]).stdout(Stdio::null());
             c
         })?;
         fs::write(&owner, &p.path)?;
@@ -200,7 +200,7 @@ fn fetch(p: &Project, work: &Path, guard: &Guard) -> Result<String> {
     let mut failure = None;
     for attempt in 1..=4 {
         let mut cmd = git(&repo);
-        cmd.args(["fetch", "--depth=1", "--no-tags", "--no-recurse-submodules",
+        cmd.args(["fetch", "--quiet", "--depth=1", "--no-tags", "--no-recurse-submodules",
                   "--no-write-fetch-head", "origin", &spec]);
         match guard.run(cmd) {
             Ok(()) => { failure = None; break; }
@@ -261,7 +261,7 @@ fn stage_project(p: &Project, all: &[Project], work: &Path, guard: &Guard,
     let repo = work.join("active.git");
     let mut cmd = git(&repo);
     cmd.arg(format!("--work-tree={}", dest.display()))
-        .args(["-c", "core.bare=false", "checkout", "--detach", "-f", sha]);
+        .args(["-c", "core.bare=false", "checkout", "--quiet", "--detach", "-f", sha]);
     guard.run(cmd)?;
     let prefix = format!("{}/", p.path);
     for child in all {
@@ -370,7 +370,8 @@ fn squashfs(partial: &Path, work: &Path, guard: &Guard, count: usize) -> Result<
     cmd.arg("-").arg(partial).args(["-tar", "-comp", "xz", "-b", "1M",
         "-tailends", "-no-progress", "-exit-on-error", "-all-root",
         "-processors", "8", "-noappend", "-Xdict-size", "100%"]);
-    let mut child = cmd.stdin(Stdio::piped()).spawn()?;
+    let log = work.join("mksquashfs.log");
+    let mut child = cmd.stdin(Stdio::piped()).stderr(File::create(&log)?).spawn()?;
     let result: Result<()> = (|| {
         let mut sink = child.stdin.take().ok_or("mksquashfs stdin unavailable")?;
         for i in 0..count {
@@ -381,6 +382,13 @@ fn squashfs(partial: &Path, work: &Path, guard: &Guard, count: usize) -> Result<
     })();
     if result.is_err() { let _ = child.kill(); }
     let status = child.wait()?;
+    let messages = fs::read(&log)?;
+    for line in String::from_utf8_lossy(&messages).lines() {
+        if !status.success() || !(line.ends_with(" already exists in the tar file, ignoring!")
+            || line == "Empty tar filename after skipping leading /, ./, or ../, ignoring") {
+            eprintln!("{line}");
+        }
+    }
     result?;
     if !status.success() { return Err(format!("mksquashfs failed: {status}").into()); }
     guard.check()?;
