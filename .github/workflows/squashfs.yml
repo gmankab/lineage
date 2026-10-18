@@ -1,29 +1,28 @@
 on:
   workflow_dispatch: {}
 
+env:
+  GH_TOKEN: ${{ github.token }}
+
 jobs:
   squashfs:
     runs-on: ubuntu-26.04
     permissions:
-      contents: read
       packages: write
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/zram
-      - run: |
-          export id=$(gh run list -w builder.yml -s success -L 1 --json databaseId -q '.[0].databaseId')
-          gh run download $id -n lineage-src-downloader
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - uses: justinthelaw/maximize-github-runner-space@v0.12.3
-        with:
-          cleanup-profile: max
-          swapfile-size: '0'
       - name: deps
         run: |
           sudo apt update
           sudo apt install -y squashfs-tools oras
+          export id=$(gh run list -w builder.yml -s success -L 1 --json databaseId -q '.[0].databaseId')
+          gh run download $id -n lineage-src-downloader
           chmod +x lineage-src-downloader
+      - uses: justinthelaw/maximize-github-runner-space@v0.12.3
+        with:
+          cleanup-profile: max
+          swapfile-size: '0'
       - name: squashfs
         run: |
           ./lineage-src-downloader
