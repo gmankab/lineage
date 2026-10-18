@@ -321,12 +321,12 @@ fn stage_project(p: &Project, all: &[Project], work: &Path, guard: &Guard,
 fn checkpoint(stage: &Path, work: &Path, guard: &Guard, index: usize) -> Result<()> {
     let chunks = work.join("chunks");
     fs::create_dir_all(&chunks)?;
-    let complete = chunks.join(format!("{index:06}.tar.xz"));
+    let complete = chunks.join(format!("{index:06}.tar.zst"));
     let tmp = chunks.join(format!("{index:06}.tmp"));
     remove_any(&tmp)?;
     let mut cmd = Command::new("tar");
-    cmd.args(["-b", "1", "-cJf"]).arg(&tmp).arg("-C").arg(stage).arg(".")
-        .env("XZ_OPT", "-1 -T1");
+    cmd.args(["-b", "1", "-c", "-I", "zstd -T0 -5", "-f"])
+        .arg(&tmp).arg("-C").arg(stage).arg(".");
     guard.run(cmd)?;
     File::open(&tmp)?.sync_all()?;
     fs::rename(&tmp, &complete)?;
@@ -334,14 +334,20 @@ fn checkpoint(stage: &Path, work: &Path, guard: &Guard, index: usize) -> Result<
     Ok(())
 }
 
+fn chunk_file(work: &Path, index: usize) -> PathBuf {
+    let zst = work.join(format!("chunks/{index:06}.tar.zst"));
+    if zst.is_file() { zst } else { work.join(format!("chunks/{index:06}.tar.xz")) }
+}
+
 fn stream_chunk(archive: &Path, sink: &mut impl Write, guard: &Guard) -> Result<()> {
-    let mut child = Command::new("xz").arg("-dc").arg(archive)
+    let codec = if archive.extension() == Some(std::ffi::OsStr::new("zst")) { "zstd" } else { "xz" };
+    let mut child = Command::new(codec).arg("-dc").arg(archive)
         .stdout(Stdio::piped()).spawn()?;
     let result: Result<()> = (|| {
         let mut buf = [0u8; 64 * 1024];
         let mut tail = Vec::with_capacity(buf.len() + 1024);
         loop {
-            let n = child.stdout.as_mut().ok_or("xz output unavailable")?.read(&mut buf)?;
+            let n = child.stdout.as_mut().ok_or("decompress output unavailable")?.read(&mut buf)?;
             if n == 0 { break; }
             guard.check()?;
             tail.extend_from_slice(&buf[..n]);
@@ -359,7 +365,7 @@ fn stream_chunk(archive: &Path, sink: &mut impl Write, guard: &Guard) -> Result<
     if result.is_err() { let _ = child.kill(); }
     let status = child.wait()?;
     result?;
-    if !status.success() { return Err(format!("xz failed for {}: {status}", archive.display()).into()); }
+    if !status.success() { return Err(format!("{codec} failed for {}: {status}", archive.display()).into()); }
     Ok(())
 }
 
@@ -369,13 +375,13 @@ fn squashfs(partial: &Path, work: &Path, guard: &Guard, count: usize) -> Result<
     let mut cmd = Command::new("mksquashfs");
     cmd.arg("-").arg(partial).args(["-tar", "-comp", "xz", "-b", "1M",
         "-tailends", "-no-progress", "-exit-on-error", "-all-root",
-        "-processors", "8", "-noappend", "-Xdict-size", "100%"]);
+        "-noappend", "-Xdict-size", "100%"]);
     let log = work.join("mksquashfs.log");
     let mut child = cmd.stdin(Stdio::piped()).stderr(File::create(&log)?).spawn()?;
     let result: Result<()> = (|| {
         let mut sink = child.stdin.take().ok_or("mksquashfs stdin unavailable")?;
         for i in 0..count {
-            stream_chunk(&work.join(format!("chunks/{i:06}.tar.xz")), &mut sink, guard)?;
+            stream_chunk(&chunk_file(work, i), &mut sink, guard)?;
         }
         sink.write_all(&[0; 1024])?;
         Ok(())
@@ -453,7 +459,7 @@ fn build() -> Result<()> {
         return Ok(());
     }
     for i in 0..state.commits.len() {
-        if !work.join(format!("chunks/{i:06}.tar.xz")).is_file() {
+        if !chunk_file(&work, i).is_file() {
             return Err(format!("missing checkpoint {i}").into());
         }
     }
