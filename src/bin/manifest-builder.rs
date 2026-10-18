@@ -5,7 +5,6 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const BRANCH: &str = "lineage-24.0";
 const MANIFEST: &str = "https://github.com/LineageOS/android.git";
 
-#[derive(Default)]
 struct Node {
     name: String,
     attrs: BTreeMap<String, String>,
@@ -150,7 +149,7 @@ struct Project {
 #[derive(Serialize)]
 struct Plan { version: u8, projects: Vec<Project> }
 
-fn project(node: &Node, remotes: &HashMap<String, Node>, default: &Node) -> Result<Option<Project>> {
+fn project(node: &Node, remotes: &HashMap<&str, &Node>, default: &Node) -> Result<Option<Project>> {
     let groups: Vec<_> = node.attr("groups").unwrap_or("").split(',').map(str::trim).collect();
     if groups.contains(&"notdefault") && !groups.contains(&"platform-linux") {
         return Ok(None);
@@ -196,15 +195,14 @@ fn run() -> Result<()> {
     let mut default = None;
     for n in &nodes {
         if n.name == "remote" {
-            remotes.insert(n.required("name")?.to_owned(), Node { name: n.name.clone(), attrs: n.attrs.clone(), children: Vec::new() });
+            remotes.insert(n.required("name")?, n);
         } else if n.name == "default" {
             if default.replace(n).is_some() { return Err("multiple <default> entries".into()); }
         }
     }
     let default = default.ok_or("missing default")?;
     let mut projects: Vec<_> = nodes.iter().filter(|n| n.name == "project")
-        .map(|n| project(n, &remotes, default)).collect::<Result<Vec<_>>>()?
-        .into_iter().flatten().collect();
+        .filter_map(|n| project(n, &remotes, default).transpose()).collect::<Result<_>>()?;
     projects.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     if projects.is_empty() || projects.windows(2).any(|w| w[0].path == w[1].path) {
         return Err("empty/duplicate manifest project paths".into());
