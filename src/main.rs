@@ -411,6 +411,16 @@ fn marker(image: &Path, index: usize) -> Option<String> {
     if oid(commit) { Some(commit.to_string()) } else { None }
 }
 
+fn finish_checkpoint(state: &mut State, path: &Path, work: &Path, sha: String,
+                     worker: thread::JoinHandle<std::result::Result<(), String>>) -> Result<()> {
+    worker.join().map_err(|_| "checkpoint worker panicked")?
+        .map_err(|e| format!("checkpoint failed: {e}"))?;
+    state.commits.push(sha);
+    save_json(path, state)?;
+    remove_any(&work.join("stage"))?;
+    Ok(())
+}
+
 fn build() -> Result<()> {
     let plan_bytes = fs::read(PLAN)?;
     let plan: Plan = serde_json::from_slice(&plan_bytes)?;
@@ -464,17 +474,30 @@ fn build() -> Result<()> {
         }
     }
     guard.check()?;
+    let mut pending: Option<(String, thread::JoinHandle<_>)> = None;
     for (i, p) in plan.projects.iter().enumerate().skip(state.commits.len()) {
         eprintln!("[{}/{}] {}", i + 1, plan.projects.len(), p.path);
-        let sha = fetch(p, &work, &guard)?;
+        if pending.as_ref().is_some_and(|(_, worker)| worker.is_finished()) {
+            let (sha, worker) = pending.take().unwrap();
+            finish_checkpoint(&mut state, &state_path, &work, sha, worker)?;
+        }
+        let fetched = fetch(p, &work, &guard);
+        if let Some((sha, worker)) = pending.take() {
+            finish_checkpoint(&mut state, &state_path, &work, sha, worker)?;
+        }
+        let sha = fetched?;
         let stage = stage_project(p, &plan.projects, &work, &guard, &sha, i, &plan_bytes)?;
-        checkpoint(&stage, &work, &guard, i)?;
-        state.commits.push(sha);
-        save_json(&state_path, &state)?;
-        remove_any(&stage)?;
-        remove_any(&work.join("active.git"))?;
-        remove_any(&work.join("active-project"))?;
+        let work_dir = work.clone();
+        let worker_guard = Guard { root: guard.root.clone(), floor: guard.floor };
+        pending = Some((sha, thread::spawn(move || {
+            checkpoint(&stage, &work_dir, &worker_guard, i).map_err(|e| e.to_string())
+        })));
     }
+    if let Some((sha, worker)) = pending {
+        finish_checkpoint(&mut state, &state_path, &work, sha, worker)?;
+    }
+    remove_any(&work.join("active.git"))?;
+    remove_any(&work.join("active-project"))?;
     eprintln!("assembling {} projects", plan.projects.len());
     squashfs(&partial, &work, &guard, plan.projects.len())?;
     if marker(&partial, 0).as_deref() != state.commits.first().map(String::as_str)
