@@ -4,6 +4,7 @@ runs:
     - shell: bash
       run: |
         sudo modprobe zram
-        dev=$(sudo zramctl --find --algorithm zstd --size 48G)
+        dev=/dev/zram$(sudo cat /sys/class/zram-control/hot_add)
+        sudo zramctl "$dev" --algorithm zstd --size 48G
         sudo mkswap "$dev"
         sudo swapon --priority 100 "$dev"
