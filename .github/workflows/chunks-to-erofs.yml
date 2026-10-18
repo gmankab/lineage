@@ -1,0 +1,27 @@
+on:
+  workflow_dispatch: {}
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  chunks-to-erofs:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/zram
+      - name: deps
+        run: |
+          sudo apt update
+          sudo apt install -y erofs-utils
+          id=$(gh run list -w builder.yml -s success -L 1 --json databaseId -q '.[0].databaseId')
+          gh run download $id -n lineage-src-downloader
+          chmod +x lineage-src-downloader
+      - uses: justinthelaw/maximize-github-runner-space@v0.12.3
+        with:
+          cleanup-profile: max
+          swapfile-size: '0'
+      - name: erofs
+        run: |
+          ./lineage-src-downloader --erofs
+          ls -lh lineage.erofs
