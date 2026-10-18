@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 const SNAPSHOT: &str = "refs/squashfs-builder/snapshot";
 const PLAN: &str = "plan.json";
 const OUTPUT: &str = "lineage.squashfs";
@@ -26,7 +26,7 @@ struct Plan {
     projects: Vec<Project>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Deserialize)]
 struct Project {
     path: String,
     url: String,
@@ -37,7 +37,7 @@ struct Project {
     linkfiles: Vec<Placement>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Deserialize)]
 struct Placement {
     src: String,
     dest: String,
@@ -191,21 +191,19 @@ fn fetch(p: &Project, repo: &Path, guard: &Guard) -> Result<String> {
         c
     })?;
     let spec = format!("+{}:{SNAPSHOT}", p.revision);
-    let mut failure = None;
     for attempt in 1..=4 {
-        let mut cmd = git(&repo);
+        let mut cmd = git(repo);
         cmd.args(["fetch", "--quiet", "--depth=1", "--no-tags", "--no-recurse-submodules",
                   "--no-write-fetch-head", "origin", &spec]);
         match guard.run(cmd) {
-            Ok(()) => { failure = None; break; }
+            Ok(()) => break,
             Err(err) => {
                 guard.check()?;
+                if attempt == 4 { return Err(err); }
                 eprintln!("fetch attempt {attempt}/4 failed: {}", p.path);
-                failure = Some(err);
             }
         }
     }
-    if let Some(err) = failure { return Err(err); }
     let sha = fetched_commit(&repo).ok_or("fetched ref does not resolve to a commit")?;
     if oid(&p.revision) && sha != p.revision {
         return Err(format!("revision mismatch for {}", p.path).into());
@@ -394,11 +392,9 @@ fn marker(image: &Path, index: usize) -> Option<String> {
     if oid(commit) { Some(commit.to_string()) } else { None }
 }
 
-fn finish_checkpoint(state: &mut State, path: &Path, work: &Path, sha: String,
-                     worker: thread::JoinHandle<std::result::Result<(), String>>) -> Result<()> {
-    worker.join().map_err(|_| "checkpoint worker panicked")?
-        .map_err(|e| format!("checkpoint failed: {e}"))?;
-    state.commits.push(sha);
+fn finish_checkpoint(state: &mut State, path: &Path, work: &Path,
+                     worker: thread::ScopedJoinHandle<'_, Result<String>>) -> Result<()> {
+    state.commits.push(worker.join().map_err(|_| "checkpoint worker panicked")??);
     save_json(path, state)?;
     remove_any(&work.join("stage"))?;
     Ok(())
@@ -457,43 +453,41 @@ fn build() -> Result<()> {
         }
     }
     guard.check()?;
-    let mut pending: Option<(String, thread::JoinHandle<_>)> = None;
-    let mut downloads = VecDeque::new();
-    let mut next = state.commits.len();
-    for (i, p) in plan.projects.iter().enumerate().skip(state.commits.len()) {
-        while next < plan.projects.len() && downloads.len() < 16 {
-            let project = plan.projects[next].clone();
-            let repo = work.join(format!("repos/{next:06}.git"));
-            let worker_guard = Guard { root: guard.root.clone(), floor: guard.floor };
-            downloads.push_back(thread::spawn(move || {
-                fetch(&project, &repo, &worker_guard).map_err(|e| e.to_string())
+    thread::scope(|scope| -> Result<()> {
+        let mut pending: Option<thread::ScopedJoinHandle<'_, Result<String>>> = None;
+        let mut downloads = VecDeque::new();
+        let mut next = state.commits.len();
+        let work = &work;
+        let guard = &guard;
+        for (i, p) in plan.projects.iter().enumerate().skip(state.commits.len()) {
+            while next < plan.projects.len() && downloads.len() < 16 {
+                let project = &plan.projects[next];
+                let repo = work.join(format!("repos/{next:06}.git"));
+                downloads.push_back(scope.spawn(move || fetch(project, &repo, guard)));
+                next += 1;
+            }
+            eprintln!("[{}/{}] {}", i + 1, plan.projects.len(), p.path);
+            if pending.as_ref().is_some_and(|worker| worker.is_finished()) {
+                finish_checkpoint(&mut state, &state_path, work, pending.take().unwrap())?;
+            }
+            let fetched = downloads.pop_front().unwrap().join()
+                .map_err(|_| "download worker panicked")?;
+            if let Some(worker) = pending.take() {
+                finish_checkpoint(&mut state, &state_path, work, worker)?;
+            }
+            let sha = fetched?;
+            let stage = stage_project(p, &plan.projects, work, guard, &sha, i, &plan_bytes)?;
+            remove_any(&work.join(format!("repos/{i:06}.git")))?;
+            pending = Some(scope.spawn(move || {
+                checkpoint(&stage, work, guard, i)?;
+                Ok(sha)
             }));
-            next += 1;
         }
-        eprintln!("[{}/{}] {}", i + 1, plan.projects.len(), p.path);
-        if pending.as_ref().is_some_and(|(_, worker)| worker.is_finished()) {
-            let (sha, worker) = pending.take().unwrap();
-            finish_checkpoint(&mut state, &state_path, &work, sha, worker)?;
+        if let Some(worker) = pending {
+            finish_checkpoint(&mut state, &state_path, work, worker)?;
         }
-        let fetched = downloads.pop_front().unwrap().join()
-            .map_err(|_| "download worker panicked")?;
-        if let Some((sha, worker)) = pending.take() {
-            finish_checkpoint(&mut state, &state_path, &work, sha, worker)?;
-        }
-        let sha = fetched?;
-        let stage = stage_project(p, &plan.projects, &work, &guard, &sha, i, &plan_bytes)?;
-        remove_any(&work.join(format!("repos/{i:06}.git")))?;
-        let work_dir = work.clone();
-        let worker_guard = Guard { root: guard.root.clone(), floor: guard.floor };
-        pending = Some((sha, thread::spawn(move || {
-            checkpoint(&stage, &work_dir, &worker_guard, i).map_err(|e| e.to_string())
-        })));
-    }
-    if let Some((sha, worker)) = pending {
-        finish_checkpoint(&mut state, &state_path, &work, sha, worker)?;
-    }
-    remove_any(&work.join("active.git"))?;
-    remove_any(&work.join("active-project"))?;
+        Ok(())
+    })?;
     remove_any(&work.join("repos"))?;
     eprintln!("assembling {} projects", plan.projects.len());
     squashfs(&partial, &work, &guard, plan.projects.len())?;
