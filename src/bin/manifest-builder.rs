@@ -2,8 +2,7 @@ use serde::Serialize;
 use std::{collections::{BTreeMap, HashMap, HashSet}, error::Error, fs, path::{Path, PathBuf}, process::Command};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
-const BRANCH: &str = "lineage-24.0";
-const MANIFEST: &str = "https://github.com/LineageOS/android.git";
+const MANIFEST: &str = "https://codeload.github.com/LineageOS/android/tar.gz/refs/heads/lineage-24.0";
 
 struct Node {
     name: String,
@@ -154,15 +153,15 @@ fn project(node: &Node, remotes: &HashMap<&str, &Node>, default: &Node) -> Resul
     if groups.contains(&"notdefault") && !groups.contains(&"platform-linux") {
         return Ok(None);
     }
-    let name = node.required("name")?.to_owned();
-    let path = node.attr("path").unwrap_or(&name).to_owned();
+    let name = node.required("name")?;
+    let path = node.attr("path").unwrap_or(name).to_owned();
     let remote_name = node.attr("remote").or_else(|| default.attr("remote"))
         .ok_or("missing remote")?;
     let remote = remotes.get(remote_name).ok_or("unknown remote")?;
     let fetch = remote.required("fetch")?;
     let url = match fetch {
         ".." => format!("https://github.com/{name}"),
-        f if f.starts_with("https://") || f.starts_with("ssh://") =>
+        f if f.starts_with("https://") =>
             format!("{}/{name}", f.trim_end_matches('/')),
         _ => return Err(format!("unsupported remote fetch URL: {fetch}").into()),
     };
@@ -180,13 +179,27 @@ fn project(node: &Node, remotes: &HashMap<&str, &Node>, default: &Node) -> Resul
     Ok(Some(p))
 }
 
+fn command(name: &str, args: &[&str]) -> Result<()> {
+    let status = Command::new(name).args(args).status()?;
+    if !status.success() { return Err(format!("{name}: {status}").into()); }
+    Ok(())
+}
+
 fn run() -> Result<()> {
     if std::env::args_os().len() != 1 { return Err("manifest-builder takes no arguments".into()); }
     if Path::new("plan.json").exists() { return Err("plan.json exists; remove it to regenerate".into()); }
     let dir = Path::new("manifests");
     if !dir.exists() {
-        let status = Command::new("git").args(["clone", "-q", "--depth=1", "--branch", BRANCH, MANIFEST, "manifests"]).status()?;
-        if !status.success() { return Err("failed to clone LineageOS manifests".into()); }
+        let tmp = Path::new("manifests.tmp");
+        if tmp.exists() { fs::remove_dir_all(tmp)?; }
+        fs::create_dir(tmp)?;
+        fs::create_dir(tmp.join("source"))?;
+        command("curl", &["-fLsS", "--retry", "3", "--proto", "=https", "--proto-redir", "=https",
+            "-o", "manifests.tmp/archive.tar.gz", MANIFEST])?;
+        command("tar", &["-xzf", "manifests.tmp/archive.tar.gz", "-C", "manifests.tmp/source",
+            "--strip-components=1", "--no-same-owner"])?;
+        fs::rename(tmp.join("source"), dir)?;
+        fs::remove_dir_all(tmp)?;
     }
     let dir = dir.canonicalize()?;
     let mut nodes = Vec::new();

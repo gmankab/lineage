@@ -1,3 +1,5 @@
+mod http;
+
 use fs2::{available_space, FileExt};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -13,7 +15,6 @@ use std::{
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
-const SNAPSHOT: &str = "refs/squashfs-builder/snapshot";
 const PLAN: &str = "plan.json";
 const OUTPUT: &str = "lineage.squashfs";
 const WORK: &str = "workdir";
@@ -70,7 +71,7 @@ fn validate(plan: &Plan) -> Result<()> {
     for p in &plan.projects {
         safe_path(&p.path)?;
         if !paths.insert(&p.path) || p.url.is_empty()
-            || p.url.starts_with('-') || p.url.starts_with("ext::")
+            || !(p.url.starts_with("https://github.com/") || p.url.starts_with("https://android.googlesource.com/"))
             || p.revision.is_empty() || p.revision.starts_with('-')
         {
             return Err(format!("unsupported/duplicate project: {}", p.path).into());
@@ -127,7 +128,7 @@ impl Guard {
             if let Some(status) = child.try_wait()? {
                 self.check()?;
                 return if status.success() { Ok(()) }
-                    else { Err(format!("command failed ({status}): {cmd:?}").into()) };
+                    else { Err(format!("command failed ({status}): {}", cmd.get_program().to_string_lossy()).into()) };
             }
             if let Err(err) = self.check() {
                 let _ = child.kill();
@@ -139,77 +140,8 @@ impl Guard {
     }
 }
 
-fn git(dir: &Path) -> Command {
-    let mut c = Command::new("git");
-    c.arg(format!("--git-dir={}", dir.display()))
-        .arg("-c").arg("core.hooksPath=/dev/null")
-        .arg("-c").arg("gc.auto=0")
-        .arg("-c").arg("protocol.ext.allow=never")
-        .env("GIT_TERMINAL_PROMPT", "0");
-    for key in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
-                "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-                "GIT_LFS_SKIP_SMUDGE", "GIT_LFS_SKIP_DOWNLOAD_ERRORS"] {
-        c.env_remove(key);
-    }
-    c
-}
-
-fn git_output(mut cmd: Command) -> Result<String> {
-    let out = cmd.stderr(Stdio::null()).output()?;
-    if !out.status.success() { return Err("git command failed".into()); }
-    Ok(String::from_utf8(out.stdout)?.trim().to_string())
-}
-
 fn oid(s: &str) -> bool {
     (s.len() == 40 || s.len() == 64) && s.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
-fn set_head(repo: &Path, sha: &str, guard: &Guard) -> Result<()> {
-    let mut cmd = git(repo);
-    cmd.args(["update-ref", "HEAD", sha]);
-    guard.run(cmd)
-}
-
-fn fetched_commit(repo: &Path) -> Option<String> {
-    let mut cmd = git(repo);
-    cmd.args(["rev-parse", "--verify", &format!("{SNAPSHOT}^{{commit}}")]);
-    git_output(cmd).ok()
-}
-
-fn fetch(p: &Project, repo: &Path, guard: &Guard) -> Result<String> {
-    fs::create_dir_all(repo.parent().ok_or("invalid repo path")?)?;
-    if let Some(sha) = fetched_commit(repo) {
-        set_head(repo, &sha, guard)?;
-        return Ok(sha);
-    }
-    guard.run({ let mut c = Command::new("git"); c.args(["init", "--bare", "--quiet"]).arg(repo); c })?;
-    guard.run({ let mut c = git(repo); c.args(["config", "remote.origin.url", &p.url]); c })?;
-    guard.run({
-        let mut c = git(repo);
-        c.arg("-c").arg(format!("core.hooksPath={}", repo.join("hooks").display()));
-        c.args(["lfs", "install", "--local"]).stdout(Stdio::null());
-        c
-    })?;
-    let spec = format!("+{}:{SNAPSHOT}", p.revision);
-    for attempt in 1..=4 {
-        let mut cmd = git(repo);
-        cmd.args(["fetch", "--quiet", "--depth=1", "--no-tags", "--no-recurse-submodules",
-                  "--no-write-fetch-head", "origin", &spec]);
-        match guard.run(cmd) {
-            Ok(()) => break,
-            Err(err) => {
-                guard.check()?;
-                if attempt == 4 { return Err(err); }
-                eprintln!("fetch attempt {attempt}/4 failed: {}", p.path);
-            }
-        }
-    }
-    let sha = fetched_commit(&repo).ok_or("fetched ref does not resolve to a commit")?;
-    if oid(&p.revision) && sha != p.revision {
-        return Err(format!("revision mismatch for {}", p.path).into());
-    }
-    set_head(&repo, &sha, guard)?;
-    Ok(sha)
 }
 
 fn remove_any(path: &Path) -> Result<()> {
@@ -247,19 +179,14 @@ fn stage_project(p: &Project, all: &[Project], work: &Path, guard: &Guard,
     let stage = work.join(if raw { "source" } else { "stage" });
     if !raw { remove_any(&stage)?; }
     fs::create_dir_all(&stage)?;
-    let dummy = format!("{}/dummy", p.path);
-    let dest = check_parents(&stage, &dummy)?.parent().ok_or("bad project path")?.to_path_buf();
-    if raw { remove_any(&dest)?; }
-    fs::create_dir_all(&dest)?;
-    let repo = work.join(format!("repos/{index:06}.git"));
-    let mut cmd = git(&repo);
-    cmd.arg(format!("--work-tree={}", dest.display()))
-        .args(["-c", "core.bare=false", "-c", "checkout.workers=4", "checkout", "--quiet", "--detach", "-f", sha]);
-    guard.run(cmd)?;
+    let dest = check_parents(&stage, &p.path)?;
+    remove_any(&dest)?;
+    fs::create_dir(&dest)?;
+    http::unpack(p, &work.join(format!("downloads/{index:06}")), &dest, sha, guard)?;
     let prefix = format!("{}/", p.path);
     for child in all {
         if let Some(tail) = child.path.strip_prefix(&prefix) {
-            remove_any(&dest.join(tail))?;
+            remove_any(&check_parents(&dest, tail)?)?;
         }
     }
     for other in all {
@@ -267,7 +194,7 @@ fn stage_project(p: &Project, all: &[Project], work: &Path, guard: &Guard,
             if item.dest.starts_with(&prefix) && !p.copyfiles.iter().chain(&p.linkfiles)
                 .any(|owned| owned.dest == item.dest)
             {
-                let x = stage.join(&item.dest);
+                let x = check_parents(&stage, &item.dest)?;
                 if let Ok(meta) = fs::symlink_metadata(&x) {
                     if meta.is_dir() { return Err(format!("placement hides directory: {}", item.dest).into()); }
                     fs::remove_file(x)?;
@@ -287,7 +214,7 @@ fn stage_project(p: &Project, all: &[Project], work: &Path, guard: &Guard,
 fn place_files(p: &Project, stage: &Path) -> Result<()> {
     let dest = stage.join(&p.path);
     for item in &p.copyfiles {
-        let source = dest.join(&item.src);
+        let source = check_parents(&dest, &item.src)?;
         if !fs::symlink_metadata(&source)?.is_file() {
             return Err(format!("copyfile source is not regular: {}", source.display()).into());
         }
@@ -304,7 +231,7 @@ fn place_files(p: &Project, stage: &Path) -> Result<()> {
     }
     for item in &p.linkfiles {
         let src = item.src.trim_end_matches('/');
-        let origin = if src == "." { dest.clone() } else { dest.join(src) };
+        let origin = if src == "." { dest.clone() } else { check_parents(&dest, src)? };
         fs::symlink_metadata(&origin)?;
         let to = check_parents(&stage, &item.dest)?;
         if fs::symlink_metadata(&to).is_ok_and(|m| m.is_dir()) {
@@ -404,6 +331,7 @@ fn finish_checkpoint(state: &mut State, path: &Path, work: &Path,
     state.commits.push(worker.join().map_err(|_| "checkpoint worker panicked")??);
     save_json(path, state)?;
     remove_any(&work.join("stage"))?;
+    remove_any(&work.join(format!("downloads/{:06}", state.commits.len() - 1)))?;
     Ok(())
 }
 
@@ -461,7 +389,8 @@ fn build(raw: bool) -> Result<()> {
     for (i, sha) in state.commits.iter().enumerate() {
         if raw {
             let marker = work.join(format!("source/.source-image/commits/{i:06}"));
-            if fs::read_to_string(marker)?.trim() != sha {
+            if fs::read_to_string(marker)?.trim() != sha
+                || !work.join("source").join(&plan.projects[i].path).is_dir() {
                 return Err(format!("missing raw project {i}").into());
             }
         } else if !chunk_file(&work, i).is_file() {
@@ -478,8 +407,8 @@ fn build(raw: bool) -> Result<()> {
         for (i, p) in plan.projects.iter().enumerate().skip(state.commits.len()) {
             while next < plan.projects.len() && downloads.len() < 16 {
                 let project = &plan.projects[next];
-                let repo = work.join(format!("repos/{next:06}.git"));
-                downloads.push_back(scope.spawn(move || fetch(project, &repo, guard)));
+                let dir = work.join(format!("downloads/{next:06}"));
+                downloads.push_back(scope.spawn(move || http::fetch(project, &dir, guard)));
                 next += 1;
             }
             eprintln!("[{}/{}] {}", i + 1, plan.projects.len(), p.path);
@@ -491,12 +420,12 @@ fn build(raw: bool) -> Result<()> {
             if let Some(worker) = pending.take() {
                 finish_checkpoint(&mut state, &state_path, work, worker)?;
             }
-            let sha = fetched?;
+            let sha = fetched.map_err(|e| format!("{}: {e}", p.path))?;
             let stage = stage_project(p, &plan.projects, work, guard, &sha, i, &plan_bytes, raw)?;
-            remove_any(&work.join(format!("repos/{i:06}.git")))?;
             if raw {
                 state.commits.push(sha);
                 save_json(&state_path, &state)?;
+                remove_any(&work.join(format!("downloads/{i:06}")))?;
             } else {
                 pending = Some(scope.spawn(move || {
                     checkpoint(&stage, work, guard, i)?;
@@ -509,10 +438,14 @@ fn build(raw: bool) -> Result<()> {
         }
         Ok(())
     })?;
+    remove_any(&work.join("active.git"))?;
+    remove_any(&work.join("active-project"))?;
     remove_any(&work.join("repos"))?;
+    remove_any(&work.join("downloads"))?;
     if raw {
         let source = work.join("source");
         for p in &plan.projects { place_files(p, &source)?; }
+        guard.check()?;
         eprintln!("COMPLETE: {}", source.display());
         return Ok(());
     }
@@ -547,20 +480,13 @@ mod tests {
         let work = std::env::temp_dir().join(format!("squashfs-empty-{}", std::process::id()));
         fs::create_dir(&work).unwrap();
         let guard = Guard { root: work.clone(), floor: 0 };
-        let repo = work.join("repos/000000.git");
-        fs::create_dir_all(repo.parent().unwrap()).unwrap();
-        let mut init = Command::new("git");
-        init.args(["init", "--bare", "--quiet"]).arg(&repo);
-        guard.run(init).unwrap();
-        let mut tree = git(&repo);
-        tree.arg("mktree").stdin(Stdio::null());
-        let tree = git_output(tree).unwrap();
-        let mut commit = git(&repo);
-        commit.args(["-c", "user.name=Test", "-c", "user.email=test@example.invalid",
-                     "commit-tree", &tree, "-m", "empty"]);
-        let sha = git_output(commit).unwrap();
-        set_head(&repo, &sha, &guard).unwrap();
-        let project = Project { path: "empty".into(), url: "unused".into(),
+        let dir = work.join("downloads/000000");
+        fs::create_dir_all(&dir).unwrap();
+        let mut tar = Command::new("tar");
+        tar.arg("-czf").arg(dir.join("archive.tar.gz")).args(["--files-from", "/dev/null"]);
+        guard.run(tar).unwrap();
+        let sha = "0".repeat(40);
+        let project = Project { path: "empty".into(), url: "https://android.googlesource.com/empty".into(),
             revision: sha.clone(), copyfiles: vec![], linkfiles: vec![] };
         for raw in [false, true] {
             let stage = stage_project(&project, std::slice::from_ref(&project), &work,
