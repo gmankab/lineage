@@ -4,6 +4,9 @@ on:
 jobs:
   squashfs:
     runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/zram
@@ -16,9 +19,18 @@ jobs:
         with:
           cleanup-profile: max
           swapfile-size: '0'
-      - run: |
-          sudo apt-get update
-          sudo apt-get install -y squashfs-tools
+      - name: deps
+        run: |
+          sudo apt update
+          sudo apt install -y squashfs-tools oras
           chmod +x squashfs-builder
+      - name: squashfs
+        run: |
           ./squashfs-builder
+      - name: upload
+        run: |
           ls -lh lineage.squashfs
+          rm -rf workdir
+          split -b 1G -d -a 3 lineage.squashfs part-
+          oras login ghcr.io --username=$GITHUB_ACTOR --password=${{ github.token }}
+          oras push --artifact-type application/vnd.lineage.squashfs ghcr.io/gmankab/lineage-squashfs:latest part-*
