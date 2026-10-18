@@ -5,7 +5,7 @@ env:
   GH_TOKEN: ${{ github.token }}
 
 jobs:
-  squashfs:
+  chunks-to-squashfs:
     runs-on: ubuntu-26.04
     permissions:
       packages: write
