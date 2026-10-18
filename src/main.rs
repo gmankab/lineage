@@ -164,12 +164,9 @@ fn oid(s: &str) -> bool {
     (s.len() == 40 || s.len() == 64) && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-fn lfs_fetch(repo: &Path, sha: &str, guard: &Guard) -> Result<()> {
-    let mut head = git(repo);
-    head.args(["update-ref", "HEAD", sha]);
-    guard.run(head)?;
+fn set_head(repo: &Path, sha: &str, guard: &Guard) -> Result<()> {
     let mut cmd = git(repo);
-    cmd.args(["lfs", "fetch", "origin", SNAPSHOT]);
+    cmd.args(["update-ref", "HEAD", sha]);
     guard.run(cmd)
 }
 
@@ -196,7 +193,7 @@ fn fetch(p: &Project, work: &Path, guard: &Guard) -> Result<String> {
         fs::write(&owner, &p.path)?;
     }
     if let Some(sha) = fetched_commit(&repo) {
-        lfs_fetch(&repo, &sha, guard)?;
+        set_head(&repo, &sha, guard)?;
         return Ok(sha);
     }
     let spec = format!("+{}:{SNAPSHOT}", p.revision);
@@ -219,7 +216,7 @@ fn fetch(p: &Project, work: &Path, guard: &Guard) -> Result<String> {
     if oid(&p.revision) && sha != p.revision {
         return Err(format!("revision mismatch for {}", p.path).into());
     }
-    lfs_fetch(&repo, &sha, guard)?;
+    set_head(&repo, &sha, guard)?;
     Ok(sha)
 }
 
