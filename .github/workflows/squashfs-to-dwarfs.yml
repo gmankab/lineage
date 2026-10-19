@@ -31,5 +31,5 @@ jobs:
           sudo mount -o loop,ro -t squashfs lineage.squashfs source
       - name: dwarfs
         run: |
-          mkdwarfs -i source -o lineage.dwarfs -l 9 -S 26 -B 16 --pack-metadata=all
+          mkdwarfs -i source -o lineage.dwarfs -l 4 -C zstd:level=9 -S 24 -B 4 --order=similarity --pack-metadata=all --progress=simple
           ls -lh lineage.dwarfs
