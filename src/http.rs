@@ -194,6 +194,15 @@ fn lfs(repo: &str, sha: &str, dir: &Path, guard: &Guard) -> Result<()> {
     Ok(())
 }
 
+fn gitiles_commit(body: &[u8], revision: &str) -> Result<String> {
+    let json = body.splitn(2, |b| *b == b'\n').nth(1).ok_or("invalid Gitiles JSON")?;
+    let value: Value = serde_json::from_slice(json)?;
+    let entry = if revision.starts_with("refs/") { &value[revision] } else { &value };
+    Ok(entry["peeled"].as_str().or_else(|| entry["value"].as_str())
+        .or_else(|| entry["commit"].as_str())
+        .ok_or("revision does not resolve to a commit")?.to_owned())
+}
+
 pub fn fetch(p: &Project, dir: &Path, guard: &Guard) -> Result<String> {
     fs::create_dir_all(dir)?;
     let repo = github(p);
@@ -218,11 +227,11 @@ pub fn fetch(p: &Project, dir: &Path, guard: &Guard) -> Result<String> {
                 }
                 *next = Some(Instant::now() + Duration::from_millis(500));
             }
-            let url = format!("{}/+show/{revision}/?format=JSON", p.url.trim_end_matches('/'));
-            let bytes = request(curl(&url), guard)?;
-            let bytes = bytes.splitn(2, |b| *b == b'\n').nth(1).ok_or("invalid Gitiles JSON")?;
-            let value: Value = serde_json::from_slice(bytes)?;
-            value["commit"].as_str().ok_or("revision does not resolve to a commit")?.to_string()
+            let target = if let Some(name) = revision.strip_prefix("refs/") {
+                format!("+refs/{name}")
+            } else { format!("+show/{revision}") };
+            let url = format!("{}/{target}?format=JSON", p.url.trim_end_matches('/'));
+            gitiles_commit(&request(curl(&url), guard)?, &p.revision)?
         }
     };
     if !oid(&sha) || oid(&p.revision) && !sha.eq_ignore_ascii_case(&p.revision) {
@@ -322,6 +331,25 @@ pub fn unpack(p: &Project, dir: &Path, dest: &Path, sha: &str, guard: &Guard) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gitiles_resolves_refs_and_bare_branches() {
+        let sha = "b8c945e55a2e47eaa698f5f916c004bd83bcb811";
+        let tag = "refs/tags/android-17.0.0_r1";
+        let annotated = format!(")]}}'\n{}", json!({tag: {
+            "value": "c59fcb08a5bebb96b2dc730e4da1c4de4002fad7", "peeled": sha
+        }}));
+        let direct = format!(")]}}'\n{}", json!({tag: {"value": sha}, "refs/heads/main": {"value": sha}}));
+        let commit = format!(")]}}'\n{}", json!({"commit": sha}));
+        assert_eq!(gitiles_commit(annotated.as_bytes(), tag).unwrap(), sha);
+        assert_eq!(gitiles_commit(direct.as_bytes(), tag).unwrap(), sha);
+        assert_eq!(gitiles_commit(direct.as_bytes(), "refs/heads/main").unwrap(), sha);
+        assert_eq!(gitiles_commit(commit.as_bytes(), "main-kernel-2025").unwrap(), sha);
+        assert!(gitiles_commit(direct.as_bytes(), "refs/tags/missing").is_err());
+        assert!(gitiles_commit(b"missing JSON prefix", tag).is_err());
+        assert!(gitiles_commit(b")]}'\n{", tag).is_err());
+        assert!(gitiles_commit(b")]}'\n{\"entries\": []}", "main-kernel-2025").is_err());
+    }
 
     #[test]
     fn pointer_requires_the_full_hash_and_size() {
