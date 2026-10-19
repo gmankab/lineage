@@ -11,13 +11,10 @@ jobs:
       - name: deps
         run: |
           sudo apt update
-          sudo apt install -y erofs-utils btrfs-progs
+          sudo apt install -y erofs-utils
           id=$(gh run list -w builder.yml -s success -L 1 --json databaseId -q '.[0].databaseId')
           gh run download $id -n lineage-src-downloader
           chmod +x lineage-src-downloader
-      - uses: ./.github/actions/btrfs
-        env:
-          dir: erofs-workdir
       - uses: justinthelaw/maximize-github-runner-space@v0.12.3
         with:
           cleanup-profile: max

@@ -10,8 +10,6 @@ jobs:
       - uses: ./.github/actions/zram
       - name: deps
         run: |
-          sudo apt update
-          sudo apt install -y btrfs-progs
           export id=$(gh run list -w builder.yml -s success -L 1 --json databaseId -q '.[0].databaseId')
           gh run download $id -n lineage-src-downloader
           chmod +x lineage-src-downloader
@@ -19,9 +17,6 @@ jobs:
           curl -fL https://github.com/mhx/dwarfs/releases/download/v0.15.7/dwarfs-0.15.7-Linux-x86_64.tar.xz | tar -xJ -C dwarfs
           sudo install -m 755 dwarfs/dwarfs-0.15.7-Linux-x86_64/bin/mkdwarfs /usr/local/bin/mkdwarfs
           rm -rf dwarfs
-      - uses: ./.github/actions/btrfs
-        env:
-          dir: raw-workdir
       - uses: justinthelaw/maximize-github-runner-space@v0.12.3
         with:
           cleanup-profile: max
