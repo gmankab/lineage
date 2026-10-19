@@ -1,9 +1,7 @@
 on:
   workflow_dispatch: {}
-
 env:
   GH_TOKEN: ${{ github.token }}
-
 jobs:
   chunks-to-squashfs:
     runs-on: ubuntu-26.04
