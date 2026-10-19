@@ -165,8 +165,13 @@ fn project(node: &Node, remotes: &HashMap<&str, &Node>, default: &Node) -> Resul
             format!("{}/{name}", f.trim_end_matches('/')),
         _ => return Err(format!("unsupported remote fetch URL: {fetch}").into()),
     };
-    let revision = node.attr("revision").or_else(|| remote.attr("revision"))
+    let mut revision = node.attr("revision").or_else(|| remote.attr("revision"))
         .or_else(|| default.attr("revision")).ok_or("missing revision")?.to_owned();
+    // Preserve the Android 17 libcxxabi pin in plan.json when regenerating.
+    if url == "https://android.googlesource.com/platform/external/libcxxabi"
+        && revision == "refs/tags/android-17.0.0_r1" {
+        revision = "84450eba5a24fe5b7df77ed1307bfada05b14dc7".into();
+    }
     if node.attr("sync-s") == Some("true") { return Err(format!("submodules unsupported: {path}").into()); }
     let mut p = Project { path, url, revision, copyfiles: Vec::new(), linkfiles: Vec::new() };
     for child in &node.children {
