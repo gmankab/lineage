@@ -14,7 +14,7 @@ jobs:
       - name: dependencies
         run: |
           sudo apt update
-          sudo apt install -y oras
+          sudo apt install -y oras btrfs-progs squashfs-tools
           mkdir dwarfs
           curl -L https://github.com/mhx/dwarfs/releases/download/v0.15.7/dwarfs-0.15.7-Linux-x86_64.tar.xz | tar -xJ -C dwarfs
           sudo cp dwarfs/dwarfs-0.15.7-Linux-x86_64/bin/mkdwarfs /usr/local/bin/mkdwarfs
@@ -27,8 +27,13 @@ jobs:
             cat $part >> lineage.squashfs
             rm $part
           done
-          mkdir -p source
-          sudo mount -o loop,ro -t squashfs lineage.squashfs source
+      - uses: ./.github/actions/btrfs
+        env:
+          dir: source
+      - name: extract squashfs
+        run: |
+          sudo unsquashfs -f -no-progress -d source lineage.squashfs
+          rm lineage.squashfs
       - name: dwarfs
         run: |
           mkdwarfs -i source -o lineage.dwarfs -l 4 -C zstd:level=9 -S 24 -B 4 --order=similarity --pack-metadata=all --progress=simple
