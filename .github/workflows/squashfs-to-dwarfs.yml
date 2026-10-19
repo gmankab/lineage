@@ -14,7 +14,7 @@ jobs:
       - name: dependencies
         run: |
           sudo apt update
-          sudo apt install -y oras
+          sudo apt install -y oras btrfs-progs squashfs-tools
           mkdir dwarfs
           curl -L https://github.com/mhx/dwarfs/releases/download/v0.15.7/dwarfs-0.15.7-Linux-x86_64.tar.xz | tar -xJ -C dwarfs
           sudo cp dwarfs/dwarfs-0.15.7-Linux-x86_64/bin/mkdwarfs /usr/local/bin/mkdwarfs
@@ -27,8 +27,14 @@ jobs:
             cat $part >> lineage.squashfs
             rm $part
           done
-          mkdir -p source
-          sudo mount -o loop,ro -t squashfs lineage.squashfs source
+      - name: extract squashfs
+        run: |
+          truncate -s 140G source.btrfs
+          sudo mkfs.btrfs -f source.btrfs
+          mkdir source
+          sudo mount -o loop,compress=zstd:3 source.btrfs source
+          sudo unsquashfs -f -no-progress -d source lineage.squashfs
+          rm lineage.squashfs
       - name: dwarfs
         run: |
           # Avoid level-9 LZMA/Nilsimsa work on a six-hour runner.
