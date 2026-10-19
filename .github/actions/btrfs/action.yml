@@ -1,0 +1,10 @@
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        truncate -s 140G source.btrfs
+        sudo mkfs.btrfs -f source.btrfs
+        mkdir $dir
+        sudo mount -o loop,compress=zstd:8 source.btrfs $dir
+        sudo chown $USER $dir
