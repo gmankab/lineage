@@ -1,0 +1,54 @@
+'on':
+  push:
+    branches:
+    - fix/oci-cache-smoke
+jobs:
+  cache:
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      USE_CCACHE: '1'
+      CCACHE_EXEC: /usr/bin/ccache
+      CCACHE_DIR: ${{ github.workspace }}/ccache
+      CCACHE_MAXSIZE: 50GiB
+    steps:
+    - name: dependencies
+      run: 'sudo apt update
+
+        sudo apt install -y oras jq ccache
+
+        '
+    - name: login
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: 'printf ''%s'' "$GH_TOKEN" | oras login ghcr.io --username="$GITHUB_ACTOR" --password-stdin
+
+        '
+    - name: cold restore
+      run: "set -euo pipefail\nfor cache in ccache build; do\n  dir=\"$CCACHE_DIR\"\n  if [ \"$cache\" = build ]; then dir=\"$GITHUB_WORKSPACE/source/out\"; fi\n  mkdir -p \"$dir\"\n  if oras manifest fetch \"ghcr.io/gmankab/lineage-$cache:ci-smoke-ae0e09d\" > \"$RUNNER_TEMP/$cache-manifest.json\" 2> \"$RUNNER_TEMP/$cache-pull.log\"; then\n    jq -er '.layers | sort_by(.annotations[\"org.opencontainers.image.title\"])[] | .digest' \"$RUNNER_TEMP/$cache-manifest.json\" |\n      while read -r digest; do\n        oras blob fetch \"ghcr.io/gmankab/lineage-$cache@$digest\" --output -\n      done | tar -xf - -C \"$dir\"\n  elif grep -Eqi 'MANIFEST_UNKNOWN|NAME_UNKNOWN|: not found$|404 Not Found' \"$RUNNER_TEMP/$cache-pull.log\"; then\n    echo \"No $cache image yet; starting empty\"\n  else\n    cat \"$RUNNER_TEMP/$cache-pull.log\" >&2\n    exit 1\n  fi\ndone\nccache -M \"$CCACHE_MAXSIZE\"\n"
+    - name: fixtures
+      run: 'printf fixture > "$CCACHE_DIR/fixture"
+
+        printf fixture > source/out/fixture
+
+        chmod 750 source/out/fixture
+
+        ln -s fixture source/out/link
+
+        '
+    - name: save
+      run: "set -euo pipefail\nccache --cleanup\nccache -s\nfor cache in ccache build; do\n  dir=\"$CCACHE_DIR\"\n  if [ \"$cache\" = build ]; then dir=\"$GITHUB_WORKSPACE/source/out\"; fi\n  chunks=\"$RUNNER_TEMP/$cache-oci\"\n  mkdir -p \"$chunks\"\n  # Archive files and links only; do not remove directories still used by ccache.\n  (cd \"$dir\"; find . \\( -type f -o -type l \\) -print0 | tar --null -T - --remove-files -cf -) | split -b 1G -d -a 3 - \"$chunks/part-\"\n  (cd \"$chunks\"; oras push --artifact-type \"application/vnd.lineage.$cache\" --annotation \"org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY\" \"ghcr.io/gmankab/lineage-$cache:ci-smoke-ae0e09d\" part-*)\n  rm \"$chunks\"/part-*\ndone\n"
+    - name: restore
+      run: "set -euo pipefail\nfor cache in ccache build; do\n  dir=\"$CCACHE_DIR\"\n  if [ \"$cache\" = build ]; then dir=\"$GITHUB_WORKSPACE/source/out\"; fi\n  mkdir -p \"$dir\"\n  if oras manifest fetch \"ghcr.io/gmankab/lineage-$cache:ci-smoke-ae0e09d\" > \"$RUNNER_TEMP/$cache-manifest.json\" 2> \"$RUNNER_TEMP/$cache-pull.log\"; then\n    jq -er '.layers | sort_by(.annotations[\"org.opencontainers.image.title\"])[] | .digest' \"$RUNNER_TEMP/$cache-manifest.json\" |\n      while read -r digest; do\n        oras blob fetch \"ghcr.io/gmankab/lineage-$cache@$digest\" --output -\n      done | tar -xf - -C \"$dir\"\n  elif grep -Eqi 'MANIFEST_UNKNOWN|NAME_UNKNOWN|: not found$|404 Not Found' \"$RUNNER_TEMP/$cache-pull.log\"; then\n    echo \"No $cache image yet; starting empty\"\n  else\n    cat \"$RUNNER_TEMP/$cache-pull.log\" >&2\n    exit 1\n  fi\ndone\nccache -M \"$CCACHE_MAXSIZE\"\n"
+    - name: verify
+      run: 'test "$(cat "$CCACHE_DIR/fixture")" = fixture
+
+        test "$(cat source/out/fixture)" = fixture
+
+        test "$(readlink source/out/link)" = fixture
+
+        test "$(stat -c %a source/out/fixture)" = 750
+
+        '
