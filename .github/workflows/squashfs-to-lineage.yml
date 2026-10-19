@@ -1,12 +1,23 @@
 on:
   workflow_dispatch: {}
-
+env:
+  USE_CCACHE: '1'
+  CCACHE_MAXSIZE: 50GiB
+  CCACHE_EXEC: /usr/bin/ccache
+  CCACHE_DIR: ${{ github.workspace }}/ccache
+  OUT_DIR: ${{ github.workspace }}/build
+defaults:
+  run:
+    shell: bash
 jobs:
   lineage:
     runs-on: ubuntu-26.04
     permissions:
       contents: read
-      packages: read
+      packages: write
+    concurrency:
+      group: lineage-ccache-spacewar-lineage-24
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/zram
@@ -40,25 +51,65 @@ jobs:
       - name: spacewar sources
         working-directory: source
         run: |
-          set -e
           mkdir -p device/nothing kernel/nothing hardware vendor/nothing
           git clone -q --depth=1 -b lineage-24.0 https://github.com/LineageOS/android_device_nothing_Spacewar device/nothing/Spacewar
           git clone -q --depth=1 -b lineage-24.0 https://github.com/LineageOS/android_kernel_nothing_sm7325 kernel/nothing/sm7325
           git clone -q --depth=1 -b lineage-24.0 https://github.com/LineageOS/android_hardware_nothing hardware/nothing
           git clone -q --depth=1 -b lineage-24.0 https://github.com/TheMuppets/proprietary_vendor_nothing_Spacewar vendor/nothing/Spacewar
-      - name: build lineageos
-        working-directory: source
-        env:
-          USE_CCACHE: '1'
-          CCACHE_EXEC: /usr/bin/ccache
+      - name: restore ccache
+        id: restore_ccache
+        continue-on-error: true
         run: |
-          set -eo pipefail
-          ccache -M 8G
-          export SOONG_UI_NINJA_ARGS=-j4
+          mkdir -p $CCACHE_DIR
+          oras manifest fetch -o $RUNNER_TEMP/ccache-manifest.json ghcr.io/gmankab/lineage-ccache:spacewar-lineage-24 2> $RUNNER_TEMP/ccache-pull.log
+          jq -er '.layers | sort_by(.annotations["org.opencontainers.image.title"])[] | .digest' $RUNNER_TEMP/ccache-manifest.json |
+            while read -r digest; do
+              oras blob fetch ghcr.io/gmankab/lineage-ccache@$digest --output - || exit 1
+            done |
+            tar -xf - -C $CCACHE_DIR
+      - name: check ccache restore
+        if: steps.restore_ccache.outcome == 'failure'
+        run: |
+          cat $RUNNER_TEMP/ccache-pull.log >&2
+          grep -q ': not found$' $RUNNER_TEMP/ccache-pull.log
+      - name: restore build output
+        id: restore_out
+        continue-on-error: true
+        run: |
+          mkdir -p build
+          oras manifest fetch ghcr.io/gmankab/lineage-build:spacewar-lineage-24 > $RUNNER_TEMP/build-manifest.json 2> $RUNNER_TEMP/build-pull.log
+          jq -er '.layers | sort_by(.annotations["org.opencontainers.image.title"])[] | .digest' $RUNNER_TEMP/build-manifest.json |
+            while read -r digest; do
+              oras blob fetch ghcr.io/gmankab/lineage-build@$digest --output - || exit 1
+            done |
+            tar -xf - -C build
+      - name: check build output restore
+        if: steps.restore_out.outcome == 'failure'
+        run: |
+          cat $RUNNER_TEMP/build-pull.log >&2
+          grep -q ': not found$' $RUNNER_TEMP/build-pull.log
+      - name: configure ccache
+        run: |
+          ccache --max-size=$CCACHE_MAXSIZE
+      - name: build
+        id: build
+        working-directory: source
+        run: |
           source build/envsetup.sh
           breakfast Spacewar
-          brunch Spacewar
-          ls -lh out/target/product/Spacewar/lineage-*.zip
+          timeout --kill-after=30s 330m m bacon -j4
+      - name: print result size
+        run: ls -lh build/target/product/Spacewar/lineage-*.zip || true
       - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         with:
-          path: out/target/product/Spacewar/lineage-*.zip
+          path: build/target/product/Spacewar/lineage-*.zip
+      - name: save build caches
+        if: ${{ !cancelled() && steps.build.outcome != 'skipped' }}
+        run: |
+          ccache --cleanup
+          ccache --show-stats
+          for dir in ccache build; do
+            python scripts/upload-cache.py $dir
+            oras push --artifact-type application/vnd.lineage.$dir --annotation org.opencontainers.image.source=https://github.com/gmankab/lineage ghcr.io/gmankab/lineage-$cache:spacewar-lineage-24 $RUNNER_TEMP/$dir-oci/part-*
+          done
