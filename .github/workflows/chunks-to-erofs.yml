@@ -25,6 +25,8 @@ jobs:
           cleanup-profile: max
           swapfile-size: '0'
       - name: erofs
+        working-directory: erofs-workdir
         run: |
-          ./lineage-src-downloader --erofs
+          cp ../plan.json .
+          ../lineage-src-downloader --erofs
           ls -lh lineage.erofs
