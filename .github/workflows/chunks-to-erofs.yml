@@ -22,13 +22,15 @@ jobs:
           truncate -s 140G erofs-workdir.btrfs
           sudo mkfs.btrfs -f erofs-workdir.btrfs
           mkdir erofs-workdir
-          sudo mount -o loop,compress=zstd:3 erofs-workdir.btrfs erofs-workdir
+          sudo mount -o loop,compress-force=zstd:3 erofs-workdir.btrfs erofs-workdir
           sudo chown $USER erofs-workdir
       - uses: justinthelaw/maximize-github-runner-space@v0.12.3
         with:
           cleanup-profile: max
           swapfile-size: '0'
       - name: erofs
+        working-directory: erofs-workdir
         run: |
-          ./lineage-src-downloader --erofs
+          cp ../plan.json .
+          ../lineage-src-downloader --erofs
           ls -lh lineage.erofs
