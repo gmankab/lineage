@@ -13,7 +13,7 @@ jobs:
       - name: dependencies
         run: |
           sudo apt update
-          sudo apt install -y oras bc bison build-essential ccache curl erofs-utils flex g++-multilib git git-lfs gperf imagemagick protobuf-compiler python3-protobuf python-is-python3 lib32readline-dev lib32z1-dev libdw-dev libelf-dev libgnutls28-dev lz4 libsdl1.2-dev libssl-dev libxml2-utils lzop pngcrush rsync schedtool xsltproc xxd zip zlib1g-dev
+          sudo apt install -y oras jq bc bison build-essential ccache curl erofs-utils flex g++-multilib git git-lfs gperf imagemagick protobuf-compiler python3-protobuf python-is-python3 lib32readline-dev lib32z1-dev libdw-dev libelf-dev libgnutls28-dev lz4 libsdl1.2-dev libssl-dev libxml2-utils lzop pngcrush rsync schedtool xsltproc xxd zip zlib1g-dev
           git lfs install
       - uses: justinthelaw/maximize-github-runner-space@v0.12.3
         with:
