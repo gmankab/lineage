@@ -21,13 +21,9 @@ jobs:
           curl -fL https://github.com/mhx/dwarfs/releases/download/v0.15.7/dwarfs-0.15.7-Linux-x86_64.tar.xz | tar -xJ -C dwarfs
           sudo install -m 755 dwarfs/dwarfs-0.15.7-Linux-x86_64/bin/mkdwarfs /usr/local/bin/mkdwarfs
           rm -rf dwarfs
-      - name: btrfs
-        run: |
-          truncate -s 140G source.btrfs
-          sudo mkfs.btrfs -f source.btrfs
-          mkdir raw-workdir
-          sudo mount -o loop,compress=zstd:15 source.btrfs raw-workdir
-          sudo chown $USER raw-workdir
+      - uses: ./.github/actions/btrfs
+        env:
+          dir: raw-workdir
       - uses: justinthelaw/maximize-github-runner-space@v0.12.3
         with:
           cleanup-profile: max
